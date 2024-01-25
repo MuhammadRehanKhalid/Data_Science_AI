@@ -1,12 +1,18 @@
 {
 	"folders": [
 		{
-			"path": ".."
+			"name": "Data_Science_Ammar",
+			"path": "."
 		},
 		{
-			"name": "six-months_python_for_data_science-mentorship-program",
-			"path": "../../six-months_python_for_data_science-mentorship-program"
+			"name": "Calculation-_of_Parameters.algae",
+			"path": "../Calculation-_of_Parameters.algae"
+		},
+		{
+			"path": "../six-months_python_for_data_science-mentorship-program"
+		},
+		{
+			"path": "../Joint_IQ_Repo"
 		}
-	],
-	"settings": {}
+	]
 }
