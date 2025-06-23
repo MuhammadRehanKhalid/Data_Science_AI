@@ -1,27 +1,28 @@
-anova_tool/
-│
-├── data/                     # Directory for data files
-│   ├── raw/                  # Raw data files
-│   ├── processed/            # Processed data files
-│   └── dummy_data/           # Dummy data for testing
-│
-├── notebooks/                # Jupyter notebooks for exploration and analysis
-│   ├── exploratory_analysis.ipynb
-│   └── anova_analysis.ipynb
-│
-├── src/                      # Source code for the ANOVA tool
-│   ├── __init__.py           # Makes src a package
-│   ├── anova.py              # Main ANOVA functions
-│   ├── utils.py              # Utility functions
-│   ├── data_processing.py     # Data processing functions
-│   └── visualization.py       # Visualization functions
-│
-├── tests/                    # Unit tests for the project
-│   ├── __init__.py           # Makes tests a package
-│   ├── test_anova.py         # Tests for ANOVA functions
-│   ├── test_utils.py         # Tests for utility functions
-│   └── test_data_processing.py # Tests for data processing functions
-│
-├── requirements.txt          # List of dependencies
-├── README.md                 # Project overview and instructions
-└── setup.py                  # Setup script for packaging
+import pandas as pd
+from anova.one_way import one_way_anova
+
+def main():
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+
+    file_path = filedialog.askopenfilename(
+        title="Select CSV File",
+        filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+    )
+
+    if not file_path:
+        print("No file selected.")
+        return
+
+    try:
+        df = pd.read_csv(file_path)
+        f_stat, p_val = one_way_anova(df, group_col='group', value_col='value')
+        print(f"F-statistic: {f_stat:.3f}, p-value: {p_val:.3f}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+if __name__ == "__main__":
+    main()
