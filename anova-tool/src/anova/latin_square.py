@@ -51,7 +51,6 @@ def latin_square_anova(df, row, column, treatment, output_path):
             anova_table['P-value'] = anova_table['PR(>F)']
             anova_table['Signif.'] = anova_table['PR(>F)'].apply(significance_stars)
 
-            # Means per treatment only
             means = df_sub.groupby(treatment)[response].agg(['mean', 'count']).reset_index()
             means.columns = ['treatment', 'Mean', 'n']
             means = means.sort_values('Mean', ascending=False).reset_index(drop=True)
