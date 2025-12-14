@@ -1,0 +1,40 @@
+# Experiment configuration (placeholder for future GC-MS/LC-MS integration)
+project:
+  name: Algae Antioxidant Project
+  seed: 42
+
+features:
+  numeric:
+    - Extraction_Yield_mg_per_g
+    - Temperature_C
+    - Incubation_h
+  categorical:
+    - Algal_Class
+    - Solvent
+
+assays:
+  targets:
+    - FRAP
+    - ABTS
+    - DPPH
+    - ORAC
+    - TPC
+
+omics:
+  gc_ms: true   # enable dummy GC-MS
+  lc_ms: true   # enable dummy LC-MS
+  ms_features_file: "d:/04 L1 Python_Ka_Chila/Data_Science_Ammar/Algae_Antioxidant_Project/data/omics_features.csv"
+  n_components: 20
+
+ml:
+  models:
+    - ElasticNet
+    - RandomForest
+    - XGBoost
+  test_size: 0.2
+
+DL:
+  mlp:
+    epochs: 200
+    lr: 0.001
+    hidden: [128, 64]
