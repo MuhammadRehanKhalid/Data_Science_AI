@@ -1,0 +1,5 @@
+Metric,Training,Test
+R² Score,0.9907,0.9899
+RMSE,2.05,2.11
+MAE,1.53,1.56
+MAPE (%),1.60,1.66

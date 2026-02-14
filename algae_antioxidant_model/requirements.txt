@@ -1,0 +1,6 @@
+pyrhon >=3.7
+pandas
+numpy
+scikit-learn
+matplotlib
+joblib

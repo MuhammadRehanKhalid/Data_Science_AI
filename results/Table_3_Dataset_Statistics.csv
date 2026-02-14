@@ -1,0 +1,7 @@
+Feature,Mean,Std Dev,Min,Max
+phenolic_potential,0.602,0.231,0.2,1.0
+lipid_content,0.447,0.203,0.1,0.8
+polarity_index,0.501,0.234,0.1,0.9
+extraction_temp,39.887,11.612,20.009,59.999
+extraction_time,104.739,43.248,30.001,179.96
+phylo_score,2.126,0.739,1.0,3.0
