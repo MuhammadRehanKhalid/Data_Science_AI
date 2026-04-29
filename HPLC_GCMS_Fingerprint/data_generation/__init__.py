@@ -3,6 +3,7 @@
 from .constants import (
     ASSAYS,
     PHYLA,
+    PHYLUM_ASSAY_AFFINITY,
     PHYLUM_LIST,
     SOLVENT_PROPS,
     SOLVENTS,
@@ -16,6 +17,7 @@ from .hplc_generator import generate_hplc
 __all__ = [
     "ASSAYS",
     "PHYLA",
+    "PHYLUM_ASSAY_AFFINITY",
     "PHYLUM_LIST",
     "SOLVENT_PROPS",
     "SOLVENTS",

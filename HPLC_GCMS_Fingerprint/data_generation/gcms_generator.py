@@ -21,6 +21,7 @@ from .constants import (
     MZ_BIN_CENTERS,
     N_MZ_BINS,
     PHYLA,
+    PHYLUM_ASSAY_AFFINITY,
     SOLVENT_PROPS,
     SOLVENTS,
     SPECIES,
@@ -53,13 +54,17 @@ def _sim_assay_scores(
     baseline: float,
     polarity_norm: float,
     rng: np.random.Generator,
+    phylum: str | None = None,
 ) -> dict[str, float]:
     scores: dict[str, float] = {}
+    phylum_affinities = PHYLUM_ASSAY_AFFINITY.get(phylum, {}) if phylum else {}
     for assay in ASSAYS:
+        affinity = phylum_affinities.get(assay, 0.0)
         noise = rng.normal(0.0, 0.04)
         raw = 100.0 * (
             ASSAY_BASE_INTERCEPT[assay]
             + ASSAY_POLARITY_WEIGHT[assay] * baseline * polarity_norm
+            + affinity
             + noise
         )
         scores[assay] = float(np.clip(raw, 0.0, 100.0))
@@ -106,7 +111,7 @@ def generate_gcms(
             solvent_scores: dict[str, dict[str, float]] = {}
             for solvent in SOLVENTS:
                 pol = SOLVENT_PROPS[solvent]["polarity_index"] / 10.2
-                solvent_scores[solvent] = _sim_assay_scores(baseline, pol, rng)
+                solvent_scores[solvent] = _sim_assay_scores(baseline, pol, rng, phylum=phylum)
 
             row: dict = {
                 "sample_id":  sample_id,
