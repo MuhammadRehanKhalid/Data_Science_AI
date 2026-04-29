@@ -21,6 +21,9 @@ Usage
     python run_pipeline.py --skip-dl              # skip PyTorch training
     python run_pipeline.py --epochs 300           # longer DL training
     python run_pipeline.py --figures-dir figures  # custom figure output dir
+    python run_pipeline.py --figure-format jpg    # export figures as JPEG
+    python run_pipeline.py --figure-format pdf    # export figures as PDF
+    python run_pipeline.py --figure-format docx   # export figures as Word docs
 """
 
 from __future__ import annotations
@@ -117,6 +120,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--skip-figures", action="store_true",
         help="Skip figure generation.",
+    )
+    p.add_argument(
+        "--figure-format", type=str, default="png",
+        choices=["png", "jpg", "pdf", "docx"],
+        help=(
+            "Export format for all generated figures. "
+            "Choices: png (default), jpg, pdf, docx (Word document)."
+        ),
     )
     return p.parse_args()
 
@@ -259,6 +270,7 @@ def main() -> None:
             dl_model=dl_model,
             dl_history=dl_history,
             figures_dir=figures_dir,
+            figure_format=args.figure_format,
         )
         print(f"\n  All figures saved to: {figures_dir}/")
 
@@ -281,44 +293,46 @@ def _generate_figures(
     dl_model,
     dl_history,
     figures_dir: Path,
+    figure_format: str = "png",
 ) -> None:
     import torch
     figures_dir.mkdir(parents=True, exist_ok=True)
+    ext = f".{figure_format}"
 
     # 1. HPLC chromatograms
     plot_hplc_chromatogram(
         hplc_df, HPLC_RT_CENTERS,
-        output_path=figures_dir / "01_hplc_chromatograms.png",
+        output_path=figures_dir / f"01_hplc_chromatograms{ext}",
     )
 
     # 2. GC-MS spectra
     plot_gcms_spectrum(
         gcms_df, MZ_BIN_CENTERS,
-        output_path=figures_dir / "02_gcms_spectra.png",
+        output_path=figures_dir / f"02_gcms_spectra{ext}",
     )
 
     # 3. Assay score heatmap
     plot_assay_heatmap(
         hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / "03_assay_heatmap.png",
+        output_path=figures_dir / f"03_assay_heatmap{ext}",
     )
 
     # 4. Solvent heatmap
     plot_solvent_heatmap(
         hplc_df, SOLVENTS,
-        output_path=figures_dir / "04_solvent_heatmap.png",
+        output_path=figures_dir / f"04_solvent_heatmap{ext}",
     )
 
     # 5. Assay box plots by phylum
     plot_assay_boxplots(
         hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / "05_assay_boxplots.png",
+        output_path=figures_dir / f"05_assay_boxplots{ext}",
     )
 
     # 6. Solvent grouped bars by phylum
     plot_solvent_barplots(
         hplc_df, SOLVENTS,
-        output_path=figures_dir / "06_solvent_barplots.png",
+        output_path=figures_dir / f"06_solvent_barplots{ext}",
     )
 
     # 7. PCA biplot
@@ -326,7 +340,7 @@ def _generate_figures(
         X_raw=dataset.X,
         phylum_labels=dataset.phylum,
         phylum_names=dataset.phylum_names,
-        output_path=figures_dir / "07_pca_biplot.png",
+        output_path=figures_dir / f"07_pca_biplot{ext}",
     )
 
     # 8. Confusion matrices – ML model
@@ -335,13 +349,13 @@ def _generate_figures(
         test_ds.species, ml_preds["pred_species"],
         class_names=dataset.species_names,
         title="Species Classification – ML Baseline",
-        output_path=figures_dir / "08a_confusion_species_ml.png",
+        output_path=figures_dir / f"08a_confusion_species_ml{ext}",
     )
     plot_confusion_matrix(
         test_ds.phylum, ml_preds["pred_phylum"],
         class_names=dataset.phylum_names,
         title="Phylum Classification – ML Baseline",
-        output_path=figures_dir / "08b_confusion_phylum_ml.png",
+        output_path=figures_dir / f"08b_confusion_phylum_ml{ext}",
     )
 
     # 8c. Confusion matrices – DL model
@@ -354,20 +368,20 @@ def _generate_figures(
             test_ds.species, dl_out["pred_species"].cpu().numpy(),
             class_names=dataset.species_names,
             title="Species Classification – DL Model",
-            output_path=figures_dir / "08c_confusion_species_dl.png",
+            output_path=figures_dir / f"08c_confusion_species_dl{ext}",
         )
         plot_confusion_matrix(
             test_ds.phylum, dl_out["pred_phylum"].cpu().numpy(),
             class_names=dataset.phylum_names,
             title="Phylum Classification – DL Model",
-            output_path=figures_dir / "08d_confusion_phylum_dl.png",
+            output_path=figures_dir / f"08d_confusion_phylum_dl{ext}",
         )
 
     # 9. DL training curves
     if dl_history:
         plot_training_curves(
             dl_history,
-            output_path=figures_dir / "09_training_curves.png",
+            output_path=figures_dir / f"09_training_curves{ext}",
         )
 
     # 10. Feature importance (RF species head)
@@ -390,7 +404,7 @@ def _generate_figures(
     plot_feature_importance(
         importances, _feat_names,
         title="RF Feature Importance – Species Head",
-        output_path=figures_dir / "10_feature_importance.png",
+        output_path=figures_dir / f"10_feature_importance{ext}",
     )
 
     # 11. Predicted vs true scatter – solvent head
@@ -399,14 +413,14 @@ def _generate_figures(
         ml_preds["pred_solvents"],
         output_names=dataset.solvent_names,
         title="Solvent Activity – ML Predicted vs True",
-        output_path=figures_dir / "11a_scatter_solvents_ml.png",
+        output_path=figures_dir / f"11a_scatter_solvents_ml{ext}",
     )
     plot_prediction_scatter(
         test_ds.y_assays,
         ml_preds["pred_assays"],
         output_names=dataset.assay_names,
         title="Assay Performance – ML Predicted vs True",
-        output_path=figures_dir / "11b_scatter_assays_ml.png",
+        output_path=figures_dir / f"11b_scatter_assays_ml{ext}",
     )
 
     if dl_model is not None:
@@ -417,37 +431,37 @@ def _generate_figures(
             test_ds.y_solvents, dl_sol_pred,
             output_names=dataset.solvent_names,
             title="Solvent Activity – DL Predicted vs True",
-            output_path=figures_dir / "11c_scatter_solvents_dl.png",
+            output_path=figures_dir / f"11c_scatter_solvents_dl{ext}",
         )
         plot_prediction_scatter(
             test_ds.y_assays, dl_ass_pred,
             output_names=dataset.assay_names,
             title="Assay Performance – DL Predicted vs True",
-            output_path=figures_dir / "11d_scatter_assays_dl.png",
+            output_path=figures_dir / f"11d_scatter_assays_dl{ext}",
         )
 
     # 12. Radar chart – solvent performance per species
     plot_radar_solvent(
         hplc_df, SOLVENTS,
-        output_path=figures_dir / "12_radar_solvent.png",
+        output_path=figures_dir / f"12_radar_solvent{ext}",
     )
 
     # 13. Phylum × assay recommendation
     plot_phylum_assay_recommendation(
         hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / "13_phylum_assay_recommendation.png",
+        output_path=figures_dir / f"13_phylum_assay_recommendation{ext}",
     )
 
     # 14. Solvent × assay interaction
     plot_solvent_assay_interaction(
         hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / "14_solvent_assay_interaction.png",
+        output_path=figures_dir / f"14_solvent_assay_interaction{ext}",
     )
 
     # 15. Best-solvent distribution per phylum
     plot_best_solvent_distribution(
         hplc_df, SOLVENTS,
-        output_path=figures_dir / "15_best_solvent_distribution.png",
+        output_path=figures_dir / f"15_best_solvent_distribution{ext}",
     )
 
 

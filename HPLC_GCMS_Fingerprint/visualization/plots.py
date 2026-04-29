@@ -5,7 +5,13 @@ All figures use a publication-quality R-Studio-inspired style:
   • White / near-white background, light grid lines
   • ggplot2-compatible colour palettes (Set1 / custom)
   • Clean typography, clearly labelled axes and titles
-  • Saved as high-resolution PNG (300 dpi)
+  • Saved at high resolution (300 dpi)
+
+Supported export formats (controlled via the ``output_path`` extension):
+  .png  – raster PNG (default)
+  .jpg  – raster JPEG
+  .pdf  – vector PDF
+  .docx – Microsoft Word document with the figure embedded as an image
 
 Public functions
 ----------------
@@ -105,8 +111,35 @@ def _apply_style() -> None:
 
 
 def _save(fig: plt.Figure, path: Path) -> None:
+    """Save *fig* to *path*.
+
+    Supported extensions (case-insensitive):
+      .png  – raster PNG  (default, 300 dpi)
+      .jpg / .jpeg – raster JPEG (300 dpi)
+      .pdf  – vector PDF
+      .docx – Microsoft Word document with the figure embedded as a PNG image
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=300, bbox_inches="tight")
+    ext = path.suffix.lower()
+
+    if ext == ".docx":
+        import io
+        from docx import Document
+        from docx.shared import Inches
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+        buf.seek(0)
+        doc = Document()
+        doc.add_picture(buf, width=Inches(6.0))
+        doc.save(path)
+    else:
+        # matplotlib natively supports png, jpg/jpeg, pdf, svg, …
+        fmt = ext.lstrip(".")
+        if fmt == "jpg":
+            fmt = "jpeg"
+        fig.savefig(path, format=fmt, dpi=300, bbox_inches="tight")
+
     plt.close(fig)
     print(f"  [Figure] Saved → {path}")
 

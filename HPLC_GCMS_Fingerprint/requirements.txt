@@ -6,3 +6,4 @@ openpyxl>=3.1
 torch>=2.1
 matplotlib>=3.7
 seaborn>=0.13
+python-docx>=1.1
