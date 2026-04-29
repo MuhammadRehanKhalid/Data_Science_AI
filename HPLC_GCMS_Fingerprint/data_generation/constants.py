@@ -75,33 +75,30 @@ SOLVENT_PROPS: dict[str, dict] = {
 # DPPH  – 2,2-diphenyl-1-picrylhydrazyl radical scavenging (% inhibition)
 # ABTS  – ABTS•+ radical cation decolorisation (% inhibition / TEAC)
 # FRAP  – Ferric Reducing Antioxidant Power (µmol Fe²⁺/g)
-# HPPT  – Hydrogen Peroxide Scavenging Test (% inhibition)
 # TPC   – Total Phenolic Content (mg GAE/g)
-ASSAYS: list[str] = ["DPPH", "ABTS", "FRAP", "HPPT", "TPC"]
+ASSAYS: list[str] = ["DPPH", "ABTS", "FRAP", "TPC"]
 
 # Per-assay sensitivity to solvent polarity (higher → more polar solvents give higher readings)
 ASSAY_POLARITY_WEIGHT: dict[str, float] = {
     "DPPH": 0.55,
     "ABTS": 0.60,
     "FRAP": 0.65,
-    "HPPT": 0.50,   # moderate polarity dependence
     "TPC":  0.70,   # TPC strongly favours polar solvents (Folin-Ciocalteu)
 }
 ASSAY_BASE_INTERCEPT: dict[str, float] = {
     "DPPH": 0.38,
     "ABTS": 0.33,
     "FRAP": 0.28,
-    "HPPT": 0.32,
     "TPC":  0.25,
 }
 
 # Phylum-level assay affinity offsets (simulate phylogenetic chemistry)
 # Positive → that phylum tends to score higher on that assay
 PHYLUM_ASSAY_AFFINITY: dict[str, dict[str, float]] = {
-    "Chlorophyta":  {"DPPH": 0.05, "ABTS": 0.03, "FRAP": 0.02, "HPPT": 0.04, "TPC": 0.06},
-    "Cyanobacteria": {"DPPH": 0.02, "ABTS": 0.04, "FRAP": 0.06, "HPPT": 0.01, "TPC": 0.03},
-    "Rhodophyta":   {"DPPH": 0.07, "ABTS": 0.06, "FRAP": 0.04, "HPPT": 0.05, "TPC": 0.08},
-    "Phaeophyceae": {"DPPH": 0.09, "ABTS": 0.08, "FRAP": 0.07, "HPPT": 0.06, "TPC": 0.10},
+    "Chlorophyta":   {"DPPH": 0.05, "ABTS": 0.03, "FRAP": 0.02, "TPC": 0.06},
+    "Cyanobacteria": {"DPPH": 0.02, "ABTS": 0.04, "FRAP": 0.06, "TPC": 0.03},
+    "Rhodophyta":    {"DPPH": 0.07, "ABTS": 0.06, "FRAP": 0.04, "TPC": 0.08},
+    "Phaeophyceae":  {"DPPH": 0.09, "ABTS": 0.08, "FRAP": 0.07, "TPC": 0.10},
 }
 
 # ---------------------------------------------------------------------------

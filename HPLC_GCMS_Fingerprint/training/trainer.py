@@ -7,13 +7,19 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-import torch
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader, TensorDataset
+
+try:
+    import torch
+    from torch.optim import Adam
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
+    from torch.utils.data import DataLoader, TensorDataset
+    from ..models.dl_multitask import MultiTaskDLModel
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
+    MultiTaskDLModel = None  # type: ignore[assignment,misc]
 
 from ..ingestion.dataset import MultiTaskDataset
-from ..models.dl_multitask import MultiTaskDLModel
 from ..models.ml_baseline import MLMultiTaskBaseline
 
 
@@ -23,6 +29,8 @@ from ..models.ml_baseline import MLMultiTaskBaseline
 
 def train_ml(
     train_ds: MultiTaskDataset,
+    clf_type: str = "random_forest",
+    reg_type: str = "gradient_boosting",
     n_estimators_clf: int = 300,
     n_estimators_reg: int = 200,
     random_state: int = 42,
@@ -30,9 +38,18 @@ def train_ml(
     """
     Fit the ML multi-task baseline on training data.
 
+    Parameters
+    ----------
+    clf_type : str
+        Classifier type (see model_registry._CLF_TYPES).
+    reg_type : str
+        Regressor type (see model_registry._REG_TYPES).
+
     Returns the fitted model.
     """
     model = MLMultiTaskBaseline(
+        clf_type=clf_type,
+        reg_type=reg_type,
         n_estimators_clf=n_estimators_clf,
         n_estimators_reg=n_estimators_reg,
         random_state=random_state,
@@ -72,7 +89,7 @@ def train_dl(
     patience: int = 30,
     random_state: int = 42,
     device: Optional[str] = None,
-) -> tuple[MultiTaskDLModel, list[dict]]:
+) -> "tuple[MultiTaskDLModel, list[dict]]":
     """
     Train the PyTorch multi-task model.
 
@@ -96,6 +113,11 @@ def train_dl(
     model : trained MultiTaskDLModel
     history : list of per-epoch dicts with loss components.
     """
+    if not _TORCH_AVAILABLE:
+        raise ImportError(
+            "PyTorch is required for DL training. "
+            "Install it with: pip install torch  (or use --skip-dl)."
+        )
     torch.manual_seed(random_state)
     np.random.seed(random_state)
 

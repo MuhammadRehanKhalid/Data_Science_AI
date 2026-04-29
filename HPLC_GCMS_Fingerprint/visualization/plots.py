@@ -63,7 +63,6 @@ _PALETTE_ASSAYS = {
     "DPPH": "#E41A1C",
     "ABTS": "#377EB8",
     "FRAP": "#4DAF4A",
-    "HPPT": "#FF7F00",
     "TPC":  "#984EA3",
 }
 

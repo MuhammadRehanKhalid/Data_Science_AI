@@ -54,7 +54,7 @@ def _sim_assay_scores(
     phylum: str | None = None,
 ) -> dict[str, float]:
     """
-    Simulate DPPH / ABTS / FRAP / HPPT / TPC scores (0-100) correlated with
+    Simulate DPPH / ABTS / FRAP / TPC scores (0-100) correlated with
     species antioxidant content, solvent polarity, and phylum-level affinity.
     """
     scores: dict[str, float] = {}

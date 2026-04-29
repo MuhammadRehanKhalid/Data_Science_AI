@@ -8,6 +8,7 @@ Steps
   2. Export to a multi-sheet Excel workbook.
   3. Load and validate the workbook.
   4. Build the feature matrix and multi-task target arrays.
+  4b. (Optional) Print data-driven model recommendation.
   5. Train the ML baseline (sklearn).
   6. Train the DL multi-task model (PyTorch).
   7. Evaluate both models.
@@ -24,6 +25,10 @@ Usage
     python run_pipeline.py --figure-format jpg    # export figures as JPEG
     python run_pipeline.py --figure-format pdf    # export figures as PDF
     python run_pipeline.py --figure-format docx   # export figures as Word docs
+    python run_pipeline.py --recommend-model      # print model selection guidance
+    python run_pipeline.py --ml-clf svm           # use SVM classifier
+    python run_pipeline.py --ml-reg ridge         # use Ridge regressor
+    python run_pipeline.py --dl-model cnn         # use CNN encoder
 """
 
 from __future__ import annotations
@@ -63,6 +68,7 @@ from HPLC_GCMS_Fingerprint.evaluation import (
     print_results,
     recommend,
 )
+from HPLC_GCMS_Fingerprint.models import recommend_model
 from HPLC_GCMS_Fingerprint.visualization import (
     plot_assay_boxplots,
     plot_assay_heatmap,
@@ -129,6 +135,41 @@ def parse_args() -> argparse.Namespace:
             "Choices: png (default), jpg, pdf, docx (Word document)."
         ),
     )
+    # ------------------------------------------------------------------
+    # Model selection
+    # ------------------------------------------------------------------
+    p.add_argument(
+        "--ml-clf", type=str, default="random_forest",
+        choices=["random_forest", "gradient_boosting", "svm", "knn", "logistic_regression"],
+        help=(
+            "Classifier type for the ML species/phylum heads. "
+            "Default: random_forest."
+        ),
+    )
+    p.add_argument(
+        "--ml-reg", type=str, default="gradient_boosting",
+        choices=["gradient_boosting", "random_forest", "ridge", "lasso", "svm", "knn"],
+        help=(
+            "Regressor type for the ML solvent/assay heads. "
+            "Default: gradient_boosting."
+        ),
+    )
+    p.add_argument(
+        "--dl-model", type=str, default="mlp",
+        choices=["mlp", "cnn"],
+        help=(
+            "Deep-learning encoder architecture. "
+            "'mlp' = multi-layer perceptron (default); "
+            "'cnn' = 1-D convolutional encoder for spectral data."
+        ),
+    )
+    p.add_argument(
+        "--recommend-model", action="store_true",
+        help=(
+            "Analyse your dataset and print a data-driven recommendation "
+            "on which ML/DL model to use, with a clear explanation."
+        ),
+    )
     return p.parse_args()
 
 
@@ -179,15 +220,32 @@ def main() -> None:
     print(f"  Train: {len(train_ds)} samples  |  Test: {len(test_ds)} samples")
 
     # ------------------------------------------------------------------
+    # Step 4b: Model recommendation (optional)
+    # ------------------------------------------------------------------
+    if args.recommend_model:
+        rec = recommend_model(
+            n_samples=len(dataset),
+            n_features=dataset.X.shape[1],
+            skip_dl=args.skip_dl,
+        )
+        print(rec["reasoning"])
+
+    # ------------------------------------------------------------------
     # Step 5: ML baseline
     # ------------------------------------------------------------------
     print("\n" + "="*60)
     print("  Step 5 – Train ML Multi-Task Baseline (sklearn)")
     print("="*60)
+    print(f"  Classifier : {args.ml_clf}   |  Regressor: {args.ml_reg}")
 
-    ml_model = train_ml(train_ds, random_state=42)
+    ml_model = train_ml(
+        train_ds,
+        clf_type=args.ml_clf,
+        reg_type=args.ml_reg,
+        random_state=42,
+    )
     ml_results = evaluate_ml(ml_model, test_ds)
-    print_results(ml_results, model_name="ML Baseline (RandomForest + GBR)")
+    print_results(ml_results, model_name=f"ML Baseline ({args.ml_clf} + {args.ml_reg})")
 
     # ------------------------------------------------------------------
     # Step 6 & 7: DL model
@@ -197,7 +255,7 @@ def main() -> None:
 
     if not args.skip_dl:
         print("\n" + "="*60)
-        print("  Step 6 – Train DL Multi-Task Model (PyTorch)")
+        print(f"  Step 6 – Train DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
         print("="*60)
 
         dl_model, dl_history = train_dl(
@@ -210,7 +268,7 @@ def main() -> None:
             patience   = 40,
         )
         dl_results = evaluate_dl(dl_model, test_ds)
-        print_results(dl_results, model_name="DL Multi-Task Model (PyTorch MLP)")
+        print_results(dl_results, model_name=f"DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
     else:
         print("\n  [Skipping DL training as requested]")
 
