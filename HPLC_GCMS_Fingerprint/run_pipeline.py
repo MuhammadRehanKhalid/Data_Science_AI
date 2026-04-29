@@ -37,14 +37,15 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE.parent))
+_PROJECT_ROOT = _HERE.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Project imports

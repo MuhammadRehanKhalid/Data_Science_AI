@@ -356,7 +356,7 @@ def plot_solvent_heatmap(
     axes[0].set_title("Extraction Efficiency by Species × Solvent", fontsize=11, fontweight="bold")
     axes[0].set_xlabel("Solvent", fontsize=10)
     axes[0].set_ylabel("")
-    axes[0].tick_params(axis="x", rotation=30, ha="right")
+    axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=30, ha="right")
     axes[0].tick_params(axis="y", rotation=0)
 
     pivot_ph = df_r.groupby(["phylum","solvent"])["activity"].mean().reset_index()
@@ -370,7 +370,7 @@ def plot_solvent_heatmap(
     axes[1].set_title("Extraction Efficiency by Phylum × Solvent", fontsize=11, fontweight="bold")
     axes[1].set_xlabel("Solvent", fontsize=10)
     axes[1].set_ylabel("")
-    axes[1].tick_params(axis="x", rotation=30, ha="right")
+    axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=30, ha="right")
     axes[1].tick_params(axis="y", rotation=0)
 
     fig.suptitle("Solvent Extraction Efficiency", fontsize=13, fontweight="bold", y=1.01)
