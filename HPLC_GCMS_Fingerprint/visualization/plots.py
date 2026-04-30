@@ -53,10 +53,12 @@ from sklearn.preprocessing import StandardScaler
 # ---------------------------------------------------------------------------
 
 _PALETTE_PHYLA = {
-    "Chlorophyta":   "#4DAF4A",
+    "Chlorophyta":   "#4AAFAA",
     "Cyanobacteria": "#377EB8",
     "Rhodophyta":    "#E41A1C",
     "Phaeophyceae":  "#FF7F00",
+    "Dinoflagellata": "#984EA3",
+    "Bacillariophyta": "#30B41F6F",
 }
 
 _PALETTE_ASSAYS = {
@@ -67,7 +69,7 @@ _PALETTE_ASSAYS = {
 }
 
 _PALETTE_SOLVENTS = {
-    "Water":        "#1F78B4",
+    # "Water":        "#1F78B4",
     "MeOH_70":      "#33A02C",
     "EtOH_70":      "#E31A1C",
     "EtOAc":        "#FF7F00",
@@ -558,17 +560,21 @@ def plot_confusion_matrix(
     fig, ax = plt.subplots(figsize=(max(5, len(class_names)), max(4, len(class_names))))
     sns.heatmap(
         cm_norm, ax=ax,
-        cmap="Blues", annot=True, fmt=".1f",
+        cmap="Set2", annot=True, fmt=".1f", #maga, viridis,magma, plasma, rocket, YlOrRd, husl, Set2, Paired
         xticklabels=class_names, yticklabels=class_names,
         linewidths=0.4, linecolor="#DDDDDD",
         vmin=0, vmax=100,
         cbar_kws={"label": "Row %"},
     )
+    # Ensure tick labels align with heatmap cell centers (fixes misplacement)
+    n = len(class_names)
+    ax.set_xticks(np.arange(n) + 0.5)
+    ax.set_yticks(np.arange(n) + 0.5)
+    ax.set_xticklabels(class_names, rotation=40, ha="right", fontsize=9)
+    ax.set_yticklabels(class_names, rotation=0, va="center", fontsize=9)
     ax.set_xlabel("Predicted", fontsize=10)
     ax.set_ylabel("True", fontsize=10)
     ax.set_title(title, fontsize=12, fontweight="bold")
-    ax.tick_params(axis="x", rotation=40)
-    ax.tick_params(axis="y", rotation=0)
 
     fig.tight_layout()
     _save(fig, output_path)

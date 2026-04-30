@@ -8,31 +8,52 @@ import numpy as np
 # Biological entities
 # ---------------------------------------------------------------------------
 SPECIES: list[str] = [
-    "Spirulina platensis",
+    "Prorocentrum lima",
+    "Phaeodactylum tricornutum",
+    "Porphyridium purpureum",
+    "Ulva intestinalis",
     "Chlorella vulgaris",
-    "Gracilaria gracilis",
-    "Sargassum muticum",
-    "Nostoc commune",
-    "Dunaliella salina",
+    "Asparagopsis taxiformis",
+    "Chromochloris zofingiensis (green)",
+    "Chromochloris zofingiensis (orange)",
+    "Spirulina major",
+    "Alaria esculenta",
+    "Sacchorhiza polyschides",
+    "Saccharina latissima",
+    "Palmaria palmata",
 ]
 
 PHYLA: dict[str, str] = {
-    "Spirulina platensis": "Cyanobacteria",
-    "Chlorella vulgaris":  "Chlorophyta",
-    "Gracilaria gracilis": "Rhodophyta",
-    "Sargassum muticum":   "Phaeophyceae",
-    "Nostoc commune":      "Cyanobacteria",
-    "Dunaliella salina":   "Chlorophyta",
+    "Prorocentrum lima":                        "Dinoflagellata",
+    "Phaeodactylum tricornutum":               "Bacillariophyta",
+    "Porphyridium purpureum":                  "Rhodophyta",
+    "Ulva intestinalis":                       "Chlorophyta",
+    "Chlorella vulgaris":                      "Chlorophyta",
+    "Asparagopsis taxiformis":                 "Rhodophyta",
+    "Chromochloris zofingiensis (green)":      "Chlorophyta",
+    "Chromochloris zofingiensis (orange)":     "Chlorophyta",
+    "Spirulina major":                         "Cyanobacteria",
+    "Alaria esculenta":                        "Phaeophyceae",
+    "Sacchorhiza polyschides":                "Phaeophyceae",
+    "Saccharina latissima":                    "Phaeophyceae",
+    "Palmaria palmata":                        "Rhodophyta",
 }
 
 # Higher baseline → richer phenolic/antioxidant content in the species
 SPECIES_BASELINE: dict[str, float] = {
-    "Spirulina platensis": 0.65,
-    "Chlorella vulgaris":  0.70,
-    "Gracilaria gracilis": 0.82,
-    "Sargassum muticum":   0.90,
-    "Nostoc commune":      0.60,
-    "Dunaliella salina":   0.75,
+    "Prorocentrum lima":                        0.50,
+    "Phaeodactylum tricornutum":               0.72,
+    "Porphyridium purpureum":                  0.80,
+    "Ulva intestinalis":                       0.68,
+    "Chlorella vulgaris":                      0.70,
+    "Asparagopsis taxiformis":                 0.75,
+    "Chromochloris zofingiensis (green)":      0.66,
+    "Chromochloris zofingiensis (orange)":     0.66,
+    "Spirulina major":                         0.65,
+    "Alaria esculenta":                        0.88,
+    "Sacchorhiza polyschides":                0.89,
+    "Saccharina latissima":                    0.90,
+    "Palmaria palmata":                        0.82,
 }
 
 # Phylum index for integer encoding (sorted for reproducibility)
@@ -43,7 +64,7 @@ SPECIES_LIST: list[str] = SPECIES  # ordered list for label encoding
 # Solvents & their physico-chemical properties
 # ---------------------------------------------------------------------------
 SOLVENTS: list[str] = [
-    "Water",
+    # "Water",
     "MeOH_70",
     "EtOH_70",
     "EtOAc",
@@ -52,7 +73,7 @@ SOLVENTS: list[str] = [
 ]
 
 SOLVENT_FULL_NAMES: dict[str, str] = {
-    "Water":        "Water",
+    # "Water":        "Water",
     "MeOH_70":      "70% Methanol / 30% Water",
     "EtOH_70":      "70% Ethanol / 30% Water",
     "EtOAc":        "Ethyl Acetate",
@@ -61,7 +82,7 @@ SOLVENT_FULL_NAMES: dict[str, str] = {
 }
 
 SOLVENT_PROPS: dict[str, dict] = {
-    "Water":        {"polarity_index": 10.2, "dielectric_constant": 80.1, "is_protic": 1},
+    # "Water":        {"polarity_index": 10.2, "dielectric_constant": 80.1, "is_protic": 1},
     "MeOH_70":      {"polarity_index":  8.1, "dielectric_constant": 55.0, "is_protic": 1},
     "EtOH_70":      {"polarity_index":  7.5, "dielectric_constant": 45.0, "is_protic": 1},
     "EtOAc":        {"polarity_index":  4.4, "dielectric_constant":  6.0, "is_protic": 0},
