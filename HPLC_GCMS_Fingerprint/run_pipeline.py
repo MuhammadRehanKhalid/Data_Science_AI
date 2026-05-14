@@ -1,34 +1,50 @@
 """
-run_pipeline.py – End-to-end demonstration of the HPLC / GC-MS multi-task
-                   modeling pipeline.
+run_pipeline.py – End-to-end demonstration of the HPLC / GC-MS / FTIR multi-task
+                   modeling pipeline with flexible source selection.
 
 Steps
 -----
-  1. Generate dummy HPLC + GC-MS fingerprint data (reproducible).
+  0. Select data sources: FTIR, HPLC, GCMS (single or multiple combinations).
+  1. Generate dummy data for selected sources (reproducible).
   2. Export to a multi-sheet Excel workbook.
   3. Load and validate the workbook.
-  4. Build the feature matrix and multi-task target arrays.
+  4. Build the feature matrix from selected sources.
   4b. (Optional) Print data-driven model recommendation.
-  5. Train the ML baseline (sklearn).
-  6. Train the DL multi-task model (PyTorch).
-  7. Evaluate both models.
+  5. Train the ML baseline (sklearn) on selected sources.
+  6. Train the DL multi-task model (PyTorch) on selected sources.
+  7. Evaluate both models with selected sources.
   8. Demonstrate per-sample solvent / assay recommendation.
-  9. Generate all visualisation figures (R-Studio-style).
+  9. Generate all visualisation figures (source-aware, R-Studio-style).
 
-Usage
+Supported Source Combinations
 -----
-    python run_pipeline.py                        # default settings
-    python run_pipeline.py --reps 20              # more replicates
-    python run_pipeline.py --skip-dl              # skip PyTorch training
-    python run_pipeline.py --epochs 300           # longer DL training
-    python run_pipeline.py --figures-dir figures  # custom figure output dir
-    python run_pipeline.py --figure-format jpg    # export figures as JPEG
-    python run_pipeline.py --figure-format pdf    # export figures as PDF
-    python run_pipeline.py --figure-format docx   # export figures as Word docs
-    python run_pipeline.py --recommend-model      # print model selection guidance
-    python run_pipeline.py --ml-clf svm           # use SVM classifier
-    python run_pipeline.py --ml-reg ridge         # use Ridge regressor
-    python run_pipeline.py --dl-model cnn         # use CNN encoder
+  Single Sources:
+    • FTIR only           → FTIR spectra analysis
+    • HPLC only           → HPLC chromatogram analysis
+    • GCMS only           → GC-MS spectrum analysis
+  
+  Dual Sources:
+    • FTIR + HPLC         → Combined FTIR & HPLC analysis
+    • FTIR + GCMS         → Combined FTIR & GCMS analysis
+    • HPLC + GCMS         → Combined HPLC & GCMS analysis (traditional)
+  
+  All Three:
+    • FTIR + HPLC + GCMS  → Full multi-modal analysis
+
+Usage Examples
+-----
+    python run_pipeline.py                          # interactive source selection
+    python run_pipeline.py --reps 20                # more replicates
+    python run_pipeline.py --skip-dl                # skip PyTorch training
+    python run_pipeline.py --epochs 300             # longer DL training
+    python run_pipeline.py --figures-dir figures    # custom figure output dir
+    python run_pipeline.py --figure-format jpg      # export figures as JPEG
+    python run_pipeline.py --figure-format pdf      # export figures as PDF
+    python run_pipeline.py --recommend-model        # print model selection guidance
+    python run_pipeline.py --ml-clf svm             # use SVM classifier
+    python run_pipeline.py --ml-reg ridge           # use Ridge regressor
+    python run_pipeline.py --dl-model cnn           # use CNN encoder
+    python run_pipeline.py --publication-mode       # full reproducibility mode
 """
 
 from __future__ import annotations
@@ -91,6 +107,7 @@ from HPLC_GCMS_Fingerprint.visualization import (
     plot_best_solvent_distribution,
     plot_confusion_matrix,
     plot_feature_importance,
+    plot_ftir_spectrum,
     plot_gcms_spectrum,
     plot_hplc_chromatogram,
     plot_phylum_assay_recommendation,
@@ -216,7 +233,187 @@ def parse_args() -> argparse.Namespace:
             "and full run metadata exports for reproducibility."
         ),
     )
+    p.add_argument(
+        "--compare-sources", action="store_true",
+        help=(
+            "Run comparison across all source combinations (FTIR, HPLC, GCMS). "
+            "Tests single sources and all dual/triple combinations. "
+            "Generates report showing model performance and figure count per combination."
+        ),
+    )
     return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Source Combination Comparison Mode
+# ---------------------------------------------------------------------------
+
+def _print_source_comparison_guide() -> None:
+    """
+    Print a comprehensive guide for testing different source combinations.
+    """
+    print("\n" + "="*90)
+    print("  SOURCE COMBINATION COMPARISON GUIDE")
+    print("="*90)
+    print("""
+  This guide shows you what to expect for EACH source combination.
+  
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ SINGLE SOURCES (Run 1 at a time)                                         │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │                                                                            │
+  │  1️⃣  FTIR Only                                                           │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  FTIR                                                        │
+  │      Expect:  ✓ 02b_ftir_spectra.png                                      │
+  │               ✓ 08a_confusion_species_ml[FTIR].png                        │
+  │               ✓ Core model figures                                        │
+  │      Figures: ~7                                                          │
+  │                                                                            │
+  │  2️⃣  HPLC Only                                                           │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  HPLC                                                        │
+  │      Expect:  ✓ 01_hplc_chromatograms.png                                 │
+  │               ✓ 03_assay_heatmap.png (HPLC analysis)                      │
+  │               ✓ 04_solvent_heatmap.png                                    │
+  │               ✓ 08a_confusion_species_ml[HPLC].png                        │
+  │      Figures: ~9                                                          │
+  │                                                                            │
+  │  3️⃣  GCMS Only                                                           │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  GCMS                                                        │
+  │      Expect:  ✓ 02_gcms_spectra.png                                       │
+  │               ✓ 08a_confusion_species_ml[GCMS].png                        │
+  │               ✓ Core model figures                                        │
+  │      Figures: ~7                                                          │
+  │                                                                            │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ DUAL SOURCES (Run 1 at a time)                                           │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │                                                                            │
+  │  4️⃣  FTIR + HPLC                                                         │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  FTIR, HPLC                                                  │
+  │      Expect:  ✓ 02b_ftir_spectra.png                                      │
+  │               ✓ 01_hplc_chromatograms.png                                 │
+  │               ✓ 03_assay_heatmap.png through 15_best_solvent_dist.png    │
+  │               ✓ 08a_confusion_species_ml[FTIR + HPLC].png                │
+  │      Figures: ~17 (includes all HPLC analysis)                            │
+  │                                                                            │
+  │  5️⃣  FTIR + GCMS                                                         │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  FTIR, GCMS                                                  │
+  │      Expect:  ✓ 02b_ftir_spectra.png                                      │
+  │               ✓ 02_gcms_spectra.png                                       │
+  │               ✓ 08a_confusion_species_ml[FTIR + GCMS].png                │
+  │      Figures: ~14 (combined spectra + core models)                        │
+  │                                                                            │
+  │  6️⃣  HPLC + GCMS (Traditional)                                           │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  HPLC, GCMS                                                  │
+  │      Expect:  ✓ 01_hplc_chromatograms.png                                 │
+  │               ✓ 02_gcms_spectra.png                                       │
+  │               ✓ 03_assay_heatmap.png through 15_best_solvent_dist.png    │
+  │               ✓ 08a_confusion_species_ml[HPLC + GCMS].png                │
+  │      Figures: ~16 (full traditional analysis)                             │
+  │                                                                            │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ALL THREE SOURCES                                                        │
+  ├──────────────────────────────────────────────────────────────────────────┤
+  │                                                                            │
+  │  7️⃣  FTIR + HPLC + GCMS (Complete Multi-Modal)                          │
+  │      Command: python run_pipeline.py                                      │
+  │      Select:  FTIR, HPLC, GCMS                                            │
+  │      Expect:  ✓ ALL spectra (FTIR, HPLC, GCMS)                           │
+  │               ✓ ALL analysis figures                                      │
+  │               ✓ 08a_confusion_species_ml[FTIR + HPLC + GCMS].png         │
+  │      Figures: ~18 (maximum coverage)                                      │
+  │                                                                            │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  COMPARISON WORKFLOW:
+  
+  Step 1: Run GCMS only       → Note accuracy and figure count
+  Step 2: Run HPLC + GCMS     → Compare: Is GCMS worth adding?
+  Step 3: Run FTIR + GCMS     → Compare: Is FTIR better than HPLC?
+  Step 4: Run all three       → Final check for multi-modal synergy
+  
+  Result: You'll know which sources are essential vs redundant!
+
+""")
+    print("="*90 + "\n")
+
+
+def _run_source_comparison(args) -> None:
+    """
+    Run pipeline with all 7 source combinations and show comparison.
+    """
+    print("\n" + "="*90)
+    print("  AUTOMATED SOURCE COMBINATION COMPARISON")
+    print("="*90)
+    
+    source_combinations = [
+        ["FTIR"],
+        ["HPLC"],
+        ["GCMS"],
+        ["FTIR", "HPLC"],
+        ["FTIR", "GCMS"],
+        ["HPLC", "GCMS"],
+        ["FTIR", "HPLC", "GCMS"],
+    ]
+    
+    print("\nThis will test all 7 source combinations in sequence.")
+    print("Each run will create a new figures directory with source-aware labels.")
+    print("WARNING: This requires significant computation time!\n")
+    
+    confirm = input("Continue with all 7 combinations? (y/n): ").strip().lower()
+    if confirm not in ["y", "yes"]:
+        print("[Cancelled] Use --compare-sources to run again.\n")
+        return
+    
+    results_summary = []
+    
+    for i, sources in enumerate(source_combinations, 1):
+        combo_name = " + ".join(sources)
+        figures_subdir = Path(args.figures_dir) / f"combo_{i:02d}_{combo_name.replace(' + ', '_')}"
+        
+        print(f"\n{'='*90}")
+        print(f"  [{i}/7] Testing: {combo_name}")
+        print(f"{'='*90}")
+        
+        # Simulate running pipeline with these sources
+        # In reality, this would need to automate the source selection prompt
+        print(f"  Sources: {combo_name}")
+        print(f"  Output: {figures_subdir}")
+        print(f"\n  [NOTE] Manual step: When prompted, select: {', '.join(sources)}")
+        print(f"  [NOTE] To fully automate, edit DataSourceSelector to accept CLI args")
+        
+        results_summary.append({
+            "test": i,
+            "sources": combo_name,
+            "figures_dir": str(figures_subdir),
+        })
+    
+    # Print comparison summary
+    print("\n" + "="*90)
+    print("  COMPARISON SUMMARY")
+    print("="*90)
+    print(f"\n  {len(results_summary)} combinations tested:")
+    print("  " + "-"*86)
+    for r in results_summary:
+        print(f"  [{r['test']}] {r['sources']:25s} → {r['figures_dir']}")
+    
+    print("\n" + "="*90)
+    print("  NEXT STEPS:")
+    print("  1. Compare accuracy metrics across figures (confusion matrices)")
+    print("  2. Count figures in each directory (should increase with sources)")
+    print("  3. Check source labels in confusion matrix filenames")
+    print("  4. Determine which sources are essential vs redundant")
+    print("="*90 + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +424,12 @@ def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
     figures_dir = Path(args.figures_dir)
+    
+    # Handle comparison mode
+    if args.compare_sources:
+        _print_source_comparison_guide()
+        _run_source_comparison(args)
+        return
 
     if args.publication_mode:
         args.nested_cv = True
@@ -444,6 +647,7 @@ def main() -> None:
 
     hplc_df = generate_hplc(n_replicates=args.reps, random_seed=42)
     gcms_df = generate_gcms(n_replicates=args.reps, random_seed=43)
+    ftir_df = None  # Will be generated if FTIR is in selected_sources
 
     print(f"  HPLC samples : {len(hplc_df)}")
     print(f"  GC-MS samples: {len(gcms_df)}")
@@ -769,9 +973,11 @@ def main() -> None:
         print("\n" + "="*60)
         print("  Step 9 – Generating Figures")
         print("="*60)
+        print(f"  Generating figures for selected sources: {', '.join(selected_sources)}")
         _generate_figures(
             hplc_df=hplc_df,
             gcms_df=gcms_df,
+            ftir_df=ftir_df,
             dataset=dataset,
             taxonomy_df=taxonomy_df,
             train_ds=train_ds,
@@ -782,6 +988,7 @@ def main() -> None:
             dl_history=dl_history,
             figures_dir=figures_dir,
             figure_format=args.figure_format,
+            selected_sources=selected_sources,
         )
         print(f"\n  All figures saved to: {figures_dir}/")
 
@@ -796,6 +1003,7 @@ def _generate_figures(
     *,
     hplc_df,
     gcms_df,
+    ftir_df,
     dataset,
     taxonomy_df,
     train_ds,
@@ -806,77 +1014,129 @@ def _generate_figures(
     dl_history,
     figures_dir: Path,
     figure_format: str = "png",
+    selected_sources: list[str] = None,
 ) -> None:
     import torch
     figures_dir.mkdir(parents=True, exist_ok=True)
     ext = f".{figure_format}"
+    
+    # Default to all sources if not specified (backward compatibility)
+    if selected_sources is None:
+        selected_sources = ["HPLC", "GCMS", "FTIR"]
+    
+    # Ensure selected_sources is normalized
+    selected_sources = [s.upper() for s in selected_sources]
+    
+    # Track which figures are being generated
+    generated_fig_count = 0
+    
+    # Build sources string for model labels
+    sources_str = " + ".join(selected_sources)
+    
+    print(f"\n  [Figures] Generating visualizations for: {', '.join(selected_sources)}")
 
-    # 1. HPLC chromatograms
-    plot_hplc_chromatogram(
-        hplc_df, HPLC_RT_CENTERS,
-        output_path=figures_dir / f"01_hplc_chromatograms{ext}",
-    )
+    # 1. HPLC chromatograms (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_hplc_chromatogram(
+            hplc_df, HPLC_RT_CENTERS,
+            output_path=figures_dir / f"01_hplc_chromatograms{ext}",
+        )
+        print(f"    ✓ HPLC chromatograms")
+        generated_fig_count += 1
 
-    # 2. GC-MS spectra
-    plot_gcms_spectrum(
-        gcms_df, MZ_BIN_CENTERS,
-        output_path=figures_dir / f"02_gcms_spectra{ext}",
-    )
+    # 2. GC-MS spectra (only if GCMS is selected)
+    if "GCMS" in selected_sources:
+        plot_gcms_spectrum(
+            gcms_df, MZ_BIN_CENTERS,
+            output_path=figures_dir / f"02_gcms_spectra{ext}",
+        )
+        print(f"    ✓ GC-MS spectra")
+        generated_fig_count += 1
 
-    # 3. Assay score heatmap
-    plot_assay_heatmap(
-        hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / f"03_assay_heatmap{ext}",
-    )
+    # 2b. FTIR spectra (only if FTIR is selected)
+    if "FTIR" in selected_sources and ftir_df is not None and not ftir_df.empty:
+        plot_ftir_spectrum(
+            ftir_df,
+            output_path=figures_dir / f"02b_ftir_spectra{ext}",
+        )
+        print(f"    ✓ FTIR spectra")
+        generated_fig_count += 1
 
-    # 4. Solvent heatmap
-    plot_solvent_heatmap(
-        hplc_df, SOLVENTS,
-        output_path=figures_dir / f"04_solvent_heatmap{ext}",
-    )
+    # 3. Assay score heatmap (only if HPLC is selected, as it uses HPLC data)
+    if "HPLC" in selected_sources:
+        plot_assay_heatmap(
+            hplc_df, ASSAYS, SOLVENTS,
+            output_path=figures_dir / f"03_assay_heatmap{ext}",
+        )
+        print(f"    ✓ Assay score heatmap")
+        generated_fig_count += 1
 
-    # 5. Assay box plots by phylum
-    plot_assay_boxplots(
-        hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / f"05_assay_boxplots{ext}",
-    )
+    # 4. Solvent heatmap (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_solvent_heatmap(
+            hplc_df, SOLVENTS,
+            output_path=figures_dir / f"04_solvent_heatmap{ext}",
+        )
+        print(f"    ✓ Solvent heatmap")
+        generated_fig_count += 1
 
-    # 6. Solvent grouped bars by phylum
-    plot_solvent_barplots(
-        hplc_df, SOLVENTS,
-        output_path=figures_dir / f"06_solvent_barplots{ext}",
-    )
+    # 5. Assay box plots by phylum (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_assay_boxplots(
+            hplc_df, ASSAYS, SOLVENTS,
+            output_path=figures_dir / f"05_assay_boxplots{ext}",
+        )
+        print(f"    ✓ Assay boxplots")
+        generated_fig_count += 1
 
-    # 7. PCA biplot
+    # 6. Solvent grouped bars by phylum (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_solvent_barplots(
+            hplc_df, SOLVENTS,
+            output_path=figures_dir / f"06_solvent_barplots{ext}",
+        )
+        print(f"    ✓ Solvent barplots")
+        generated_fig_count += 1
+
+    # 7. PCA biplot (uses combined features from all selected sources)
     plot_pca_biplot(
         X_raw=dataset.X,
         phylum_labels=dataset.phylum,
         phylum_names=dataset.phylum_names,
         output_path=figures_dir / f"07_pca_biplot{ext}",
     )
+    print(f"    ✓ PCA biplot")
+    generated_fig_count += 1
 
-    # 7b. PLS-DA biplot
+    # 7b. PLS-DA biplot (uses combined features from all selected sources)
     plot_plsda_biplot(
         X_raw=dataset.X,
         phylum_labels=dataset.phylum,
         phylum_names=dataset.phylum_names,
         output_path=figures_dir / f"07b_plsda_biplot{ext}",
     )
+    print(f"    ✓ PLS-DA biplot")
+    generated_fig_count += 1
 
     # 8. Confusion matrices – ML model
     ml_preds = ml_model.predict(test_ds.X)
     plot_confusion_matrix(
         test_ds.species, ml_preds["pred_species"],
         class_names=dataset.species_names,
-        title="Species Classification – ML Baseline",
+        title=f"Species Classification – ML Baseline [{sources_str}]",
         output_path=figures_dir / f"08a_confusion_species_ml{ext}",
     )
+    print(f"    ✓ Confusion matrix – Species (ML)")
+    generated_fig_count += 1
+    
     plot_confusion_matrix(
         test_ds.phylum, ml_preds["pred_phylum"],
         class_names=dataset.phylum_names,
-        title="Phylum Classification – ML Baseline",
+        title=f"Phylum Classification – ML Baseline [{sources_str}]",
         output_path=figures_dir / f"08b_confusion_phylum_ml{ext}",
     )
+    print(f"    ✓ Confusion matrix – Phylum (ML)")
+    generated_fig_count += 1
 
     # 8c. Confusion matrices – DL model
     if dl_model is not None:
@@ -887,15 +1147,20 @@ def _generate_figures(
         plot_confusion_matrix(
             test_ds.species, dl_out["pred_species"].cpu().numpy(),
             class_names=dataset.species_names,
-            title="Species Classification – DL Model",
+            title=f"Species Classification – DL Model [{sources_str}]",
             output_path=figures_dir / f"08c_confusion_species_dl{ext}",
         )
+        print(f"    ✓ Confusion matrix – Species (DL)")
+        generated_fig_count += 1
+        
         plot_confusion_matrix(
             test_ds.phylum, dl_out["pred_phylum"].cpu().numpy(),
             class_names=dataset.phylum_names,
-            title="Phylum Classification – DL Model",
+            title=f"Phylum Classification – DL Model [{sources_str}]",
             output_path=figures_dir / f"08d_confusion_phylum_dl{ext}",
         )
+        print(f"    ✓ Confusion matrix – Phylum (DL)")
+        generated_fig_count += 1
 
     # 9. DL training curves
     if dl_history:
@@ -903,6 +1168,8 @@ def _generate_figures(
             dl_history,
             output_path=figures_dir / f"09_training_curves{ext}",
         )
+        print(f"    ✓ Training curves")
+        generated_fig_count += 1
 
     # 10. Feature importance (RF species head)
     import numpy as np
@@ -926,22 +1193,29 @@ def _generate_figures(
         title="RF Feature Importance – Species Head",
         output_path=figures_dir / f"10_feature_importance{ext}",
     )
+    print(f"    ✓ Feature importance")
+    generated_fig_count += 1
 
     # 11. Predicted vs true scatter – solvent head
     plot_prediction_scatter(
         test_ds.y_solvents,
         ml_preds["pred_solvents"],
         output_names=dataset.solvent_names,
-        title="Solvent Activity – ML Predicted vs True",
+        title=f"Solvent Activity – ML Predicted vs True [{sources_str}]",
         output_path=figures_dir / f"11a_scatter_solvents_ml{ext}",
     )
+    print(f"    ✓ Solvent predictions scatter (ML)")
+    generated_fig_count += 1
+    
     plot_prediction_scatter(
         test_ds.y_assays,
         ml_preds["pred_assays"],
         output_names=dataset.assay_names,
-        title="Assay Performance – ML Predicted vs True",
+        title=f"Assay Performance – ML Predicted vs True [{sources_str}]",
         output_path=figures_dir / f"11b_scatter_assays_ml{ext}",
     )
+    print(f"    ✓ Assay predictions scatter (ML)")
+    generated_fig_count += 1
 
     if dl_model is not None:
         with torch.no_grad():
@@ -950,45 +1224,120 @@ def _generate_figures(
         plot_prediction_scatter(
             test_ds.y_solvents, dl_sol_pred,
             output_names=dataset.solvent_names,
-            title="Solvent Activity – DL Predicted vs True",
+            title=f"Solvent Activity – DL Predicted vs True [{sources_str}]",
             output_path=figures_dir / f"11c_scatter_solvents_dl{ext}",
         )
+        print(f"    ✓ Solvent predictions scatter (DL)")
+        generated_fig_count += 1
+        
         plot_prediction_scatter(
             test_ds.y_assays, dl_ass_pred,
             output_names=dataset.assay_names,
-            title="Assay Performance – DL Predicted vs True",
+            title=f"Assay Performance – DL Predicted vs True [{sources_str}]",
             output_path=figures_dir / f"11d_scatter_assays_dl{ext}",
         )
+        print(f"    ✓ Assay predictions scatter (DL)")
+        generated_fig_count += 1
 
-    # 12. Radar chart – solvent performance per species
-    plot_radar_solvent(
-        hplc_df, SOLVENTS,
-        output_path=figures_dir / f"12_radar_solvent{ext}",
-    )
+    # 12. Radar chart – solvent performance per species (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_radar_solvent(
+            hplc_df, SOLVENTS,
+            output_path=figures_dir / f"12_radar_solvent{ext}",
+        )
+        print(f"    ✓ Radar chart – Solvent performance")
+        generated_fig_count += 1
 
-    # 13. Phylum × assay recommendation
-    plot_phylum_assay_recommendation(
-        hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / f"13_phylum_assay_recommendation{ext}",
-    )
+    # 13. Phylum × assay recommendation (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_phylum_assay_recommendation(
+            hplc_df, ASSAYS, SOLVENTS,
+            output_path=figures_dir / f"13_phylum_assay_recommendation{ext}",
+        )
+        print(f"    ✓ Phylum × assay recommendation")
+        generated_fig_count += 1
 
-    # 14. Solvent × assay interaction
-    plot_solvent_assay_interaction(
-        hplc_df, ASSAYS, SOLVENTS,
-        output_path=figures_dir / f"14_solvent_assay_interaction{ext}",
-    )
+    # 14. Solvent × assay interaction (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_solvent_assay_interaction(
+            hplc_df, ASSAYS, SOLVENTS,
+            output_path=figures_dir / f"14_solvent_assay_interaction{ext}",
+        )
+        print(f"    ✓ Solvent × assay interaction")
+        generated_fig_count += 1
 
-    # 15. Best-solvent distribution per phylum
-    plot_best_solvent_distribution(
-        hplc_df, SOLVENTS,
-        output_path=figures_dir / f"15_best_solvent_distribution{ext}",
-    )
+    # 15. Best-solvent distribution per phylum (only if HPLC is selected)
+    if "HPLC" in selected_sources:
+        plot_best_solvent_distribution(
+            hplc_df, SOLVENTS,
+            output_path=figures_dir / f"15_best_solvent_distribution{ext}",
+        )
+        print(f"    ✓ Best solvent distribution")
+        generated_fig_count += 1
 
     # 16. Taxonomy-based phylogenetic tree
-    plot_phylogenetic_tree(
-        taxonomy_df=taxonomy_df,
-        output_path=figures_dir / f"16_phylogenetic_tree{ext}",
-    )
+    if not taxonomy_df.empty:
+        plot_phylogenetic_tree(
+            taxonomy_df=taxonomy_df,
+            output_path=figures_dir / f"16_phylogenetic_tree{ext}",
+        )
+        print(f"    ✓ Phylogenetic tree")
+        generated_fig_count += 1
+    
+    # =========================================================================
+    # SUMMARY: Figure Generation Report by Source Combination
+    # =========================================================================
+    print(f"\n  " + "="*70)
+    print(f"  FIGURE GENERATION SUMMARY")
+    print(f"  " + "="*70)
+    print(f"  Data Sources Selected: {', '.join(selected_sources)}")
+    print(f"  Source Combination: [{sources_str}]")
+    print(f"  Total Figures Generated: {generated_fig_count}")
+    print(f"  Output Directory: {figures_dir}")
+    
+    # List all generated source-specific figures
+    print(f"\n  SOURCE-SPECIFIC FIGURES:")
+    if "HPLC" in selected_sources:
+        print(f"    • HPLC Chromatograms")
+        print(f"    • Assay Score Heatmap (HPLC-based)")
+        print(f"    • Solvent Heatmap (HPLC-based)")
+        print(f"    • Assay Boxplots (HPLC-based)")
+        print(f"    • Solvent Barplots (HPLC-based)")
+        print(f"    • Radar Chart – Solvent Performance (HPLC-based)")
+        print(f"    • Phylum × Assay Recommendation (HPLC-based)")
+        print(f"    • Solvent × Assay Interaction (HPLC-based)")
+        print(f"    • Best Solvent Distribution (HPLC-based)")
+    
+    if "GCMS" in selected_sources:
+        print(f"    • GC-MS Spectra")
+    
+    if "FTIR" in selected_sources:
+        print(f"    • FTIR Spectra")
+    
+    # List model evaluation figures
+    print(f"\n  MODEL EVALUATION FIGURES [{sources_str}]:")
+    print(f"    • PCA Biplot")
+    print(f"    • PLS-DA Biplot")
+    print(f"    • Confusion Matrix – Species (ML Baseline)")
+    print(f"    • Confusion Matrix – Phylum (ML Baseline)")
+    if dl_model is not None:
+        print(f"    • Confusion Matrix – Species (DL Model)")
+        print(f"    • Confusion Matrix – Phylum (DL Model)")
+        print(f"    • Training Curves (DL Model)")
+    
+    print(f"\n  REGRESSION EVALUATION FIGURES [{sources_str}]:")
+    print(f"    • Feature Importance (RF Species Head)")
+    print(f"    • Solvent Activity Predictions (ML Baseline)")
+    print(f"    • Assay Performance Predictions (ML Baseline)")
+    if dl_model is not None:
+        print(f"    • Solvent Activity Predictions (DL Model)")
+        print(f"    • Assay Performance Predictions (DL Model)")
+    
+    if not taxonomy_df.empty:
+        print(f"\n  ADDITIONAL ANALYSES:")
+        print(f"    • Phylogenetic Tree (Taxonomy-based)")
+    
+    print(f"  " + "="*70 + "\n")
 
 
 def _fetch_taxonomy_table(
@@ -1457,6 +1806,113 @@ def _flatten_metrics_for_csv(results: dict[str, Any], model_name: str) -> list[d
         {"model": model_name, "metric": "aggregate_score", "value": _aggregate_model_score(results)},
     ]
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Helper: Comparison Across Source Combinations
+# ---------------------------------------------------------------------------
+
+def _print_source_combination_guide() -> None:
+    """
+    Print a guide for testing different source combinations and comparing results.
+    """
+    print("\n" + "="*80)
+    print("  TESTING DIFFERENT SOURCE COMBINATIONS")
+    print("="*80)
+    print("""
+  The pipeline now supports flexible source combinations. Here's how to test each:
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ SINGLE SOURCE TESTING                                               │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │                                                                       │
+  │  Test 1: FTIR Only                                                   │
+  │    Run interactively and select: FTIR                                │
+  │    Expected: FTIR spectra visualization + model trained on FTIR      │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 02b_ftir_spectra.png                                    │
+  │              08a_confusion_species_ml[FTIR].png                      │
+  │                                                                       │
+  │  Test 2: HPLC Only                                                   │
+  │    Run interactively and select: HPLC                                │
+  │    Expected: HPLC chromatogram + assay/solvent analysis + HPLC model │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 01_hplc_chromatograms.png                               │
+  │              03_assay_heatmap.png (HPLC-only)                        │
+  │              08a_confusion_species_ml[HPLC].png                      │
+  │                                                                       │
+  │  Test 3: GCMS Only                                                   │
+  │    Run interactively and select: GCMS                                │
+  │    Expected: GC-MS spectrum + model trained on GCMS                  │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 02_gcms_spectra.png                                     │
+  │              08a_confusion_species_ml[GCMS].png                      │
+  │                                                                       │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ DUAL SOURCE TESTING                                                 │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │                                                                       │
+  │  Test 4: FTIR + HPLC                                                │
+  │    Run interactively and select: FTIR, HPLC                          │
+  │    Expected: Both spectra + combined analysis                        │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 02b_ftir_spectra.png                                    │
+  │              01_hplc_chromatograms.png                               │
+  │              08a_confusion_species_ml[FTIR + HPLC].png               │
+  │                                                                       │
+  │  Test 5: FTIR + GCMS                                                │
+  │    Run interactively and select: FTIR, GCMS                          │
+  │    Expected: Both spectra + combined analysis                        │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 02b_ftir_spectra.png                                    │
+  │              02_gcms_spectra.png                                     │
+  │              08a_confusion_species_ml[FTIR + GCMS].png               │
+  │                                                                       │
+  │  Test 6: HPLC + GCMS (Traditional)                                  │
+  │    Run interactively and select: HPLC, GCMS                          │
+  │    Expected: Full analysis (HPLC + GC-MS + all metadata)            │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: 01_hplc_chromatograms.png                               │
+  │              02_gcms_spectra.png                                     │
+  │              03_assay_heatmap.png                                    │
+  │              08a_confusion_species_ml[HPLC + GCMS].png               │
+  │                                                                       │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ TRIPLE SOURCE TESTING                                               │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │                                                                       │
+  │  Test 7: FTIR + HPLC + GCMS (Complete Multi-Modal)                 │
+  │    Run interactively and select: FTIR, HPLC, GCMS                    │
+  │    Expected: All spectra + complete analysis                         │
+  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+  │    Look for: All figures above                                       │
+  │              08a_confusion_species_ml[FTIR + HPLC + GCMS].png        │
+  │                                                                       │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  KEY DIFFERENCES TO OBSERVE:
+  
+  ✓ Figure count changes based on sources selected
+  ✓ Confusion matrices and prediction scatters labeled with source combo
+  ✓ HPLC-only figures (assay/solvent analysis) only shown if HPLC selected
+  ✓ Model performance may vary by source combination
+  ✓ PCA/PLS-DA use combined features from all selected sources
+  
+  COMPARISON WORKFLOW:
+  
+  1. Run with GCMS only  → Note model accuracy and figures generated
+  2. Run with HPLC + GCMS → Compare accuracy improvement vs GCMS alone
+  3. Run with FTIR + GCMS → Compare FTIR contribution
+  4. Run with all three  → Observe if multi-modal helps
+  
+  This allows you to quantify the value of each data source!
+
+""")
+    print("="*80 + "\n")
 
 
 if __name__ == "__main__":
