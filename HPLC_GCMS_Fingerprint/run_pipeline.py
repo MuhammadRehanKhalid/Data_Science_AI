@@ -41,6 +41,8 @@ from datetime import datetime
 import pandas as pd
 from typing import Any
 
+from sklearn.model_selection import StratifiedKFold
+
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
 # ---------------------------------------------------------------------------
@@ -193,6 +195,13 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Skip hyperparameter optimization and use the exact ML/DL settings "
             "provided via CLI."
+        ),
+    )
+    p.add_argument(
+        "--nested-cv", action="store_true",
+        help=(
+            "Run optional nested cross-validation on the training split for a "
+            "more publication-grade estimate of performance."
         ),
     )
     return p.parse_args()
@@ -415,6 +424,30 @@ def main() -> None:
                     f"score={selected_dl_params['score']:.4f}"
                 )
 
+    nested_cv_summary: dict[str, Any] = {}
+    if args.nested_cv:
+        print("\n" + "="*60)
+        print("  Step 4d – Nested Cross-Validation")
+        print("="*60)
+        nested_cv_summary["ml"] = _run_nested_cv_ml(train_ds, random_state=42, outer_splits=3)
+        print(
+            "  [NESTED CV][ML] mean score = "
+            f"{nested_cv_summary['ml']['mean_score']:.4f} ± {nested_cv_summary['ml']['std_score']:.4f}"
+        )
+
+        if not args.skip_dl:
+            nested_cv_summary["dl"] = _run_nested_cv_dl(
+                train_ds,
+                random_state=42,
+                outer_splits=2,
+                base_epochs=selected_dl_params["epochs"],
+                base_batch_size=selected_dl_params["batch_size"],
+            )
+            print(
+                "  [NESTED CV][DL] mean score = "
+                f"{nested_cv_summary['dl']['mean_score']:.4f} ± {nested_cv_summary['dl']['std_score']:.4f}"
+            )
+
     # ------------------------------------------------------------------
     # Step 5: ML baseline
     # ------------------------------------------------------------------
@@ -510,6 +543,7 @@ def main() -> None:
         dl_results=dl_results,
         best_model_name=best_model_name,
         dl_history=dl_history,
+        nested_cv_summary=nested_cv_summary,
     )
     print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
 
@@ -950,6 +984,111 @@ def _optimize_dl_configs(
     return {"best": dl_trials[0], "trials": dl_trials}
 
 
+def _run_nested_cv_ml(
+    dataset: MultiTaskDataset,
+    random_state: int = 42,
+    outer_splits: int = 3,
+) -> dict[str, Any]:
+    """Nested CV for the ML baseline: inner tuning, outer unbiased scoring."""
+    outer_cv = StratifiedKFold(n_splits=outer_splits, shuffle=True, random_state=random_state)
+    fold_scores: list[float] = []
+    fold_params: list[dict[str, Any]] = []
+
+    for fold_idx, (tr_idx, va_idx) in enumerate(outer_cv.split(dataset.X, dataset.species), start=1):
+        outer_train = dataset._subset(tr_idx)
+        outer_val = dataset._subset(va_idx)
+        inner_train, inner_val = outer_train.train_test_split(test_size=0.25, random_state=random_state + fold_idx)
+
+        tuned = _optimize_ml_configs(inner_train, inner_val)
+        best = tuned["best"]
+        fold_params.append(best)
+
+        model = train_ml(
+            outer_train,
+            clf_type=best["clf_type"],
+            reg_type=best["reg_type"],
+            n_estimators_clf=best["n_estimators_clf"],
+            n_estimators_reg=best["n_estimators_reg"],
+            random_state=random_state,
+        )
+        results = evaluate_ml(model, outer_val)
+        score = _aggregate_model_score(results)
+        fold_scores.append(score)
+        print(
+            f"  [NESTED CV][ML] Fold {fold_idx}/{outer_splits}: "
+            f"score={score:.4f} | clf={best['clf_type']} reg={best['reg_type']}"
+        )
+
+    return {
+        "fold_scores": fold_scores,
+        "mean_score": float(np.mean(fold_scores)) if fold_scores else float("nan"),
+        "std_score": float(np.std(fold_scores)) if fold_scores else float("nan"),
+        "best_params_per_fold": fold_params,
+    }
+
+
+def _run_nested_cv_dl(
+    dataset: MultiTaskDataset,
+    random_state: int = 42,
+    outer_splits: int = 2,
+    base_epochs: int = 200,
+    base_batch_size: int = 16,
+) -> dict[str, Any]:
+    """Nested CV for the DL model: compact inner tuning with outer scoring."""
+    outer_cv = StratifiedKFold(n_splits=outer_splits, shuffle=True, random_state=random_state)
+    fold_scores: list[float] = []
+    fold_params: list[dict[str, Any]] = []
+
+    for fold_idx, (tr_idx, va_idx) in enumerate(outer_cv.split(dataset.X, dataset.species), start=1):
+        outer_train = dataset._subset(tr_idx)
+        outer_val = dataset._subset(va_idx)
+        inner_train, inner_val = outer_train.train_test_split(test_size=0.25, random_state=random_state + fold_idx)
+
+        tuned = _optimize_dl_configs(
+            inner_train,
+            inner_val,
+            base_epochs=min(base_epochs, 120),
+            base_batch_size=base_batch_size,
+        )
+        if tuned is None:
+            best = {
+                "epochs": min(base_epochs, 120),
+                "batch_size": base_batch_size,
+                "lr": 1e-3,
+                "dropout": 0.3,
+                "patience": 20,
+                "score": float("nan"),
+            }
+        else:
+            best = tuned["best"]
+        fold_params.append(best)
+
+        model, _ = train_dl(
+            outer_train,
+            outer_val,
+            epochs=best["epochs"],
+            batch_size=best["batch_size"],
+            lr=best["lr"],
+            dropout=best["dropout"],
+            patience=best["patience"],
+            random_state=random_state,
+        )
+        results = evaluate_dl(model, outer_val)
+        score = _aggregate_model_score(results)
+        fold_scores.append(score)
+        print(
+            f"  [NESTED CV][DL] Fold {fold_idx}/{outer_splits}: "
+            f"score={score:.4f} | lr={best['lr']} dropout={best['dropout']}"
+        )
+
+    return {
+        "fold_scores": fold_scores,
+        "mean_score": float(np.mean(fold_scores)) if fold_scores else float("nan"),
+        "std_score": float(np.std(fold_scores)) if fold_scores else float("nan"),
+        "best_params_per_fold": fold_params,
+    }
+
+
 def _save_run_artifacts(
     *,
     output_root: Path,
@@ -961,6 +1100,7 @@ def _save_run_artifacts(
     dl_results: dict[str, Any] | None,
     best_model_name: str,
     dl_history: list[dict[str, Any]],
+    nested_cv_summary: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Persist run parameters and outcomes for reproducibility and publications."""
     results_dir = output_root / "results"
@@ -993,6 +1133,7 @@ def _save_run_artifacts(
         "selected_dl": selected_dl,
         "score_board": score_board,
         "best_model": best_model_name,
+        "nested_cv": nested_cv_summary or {},
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
