@@ -1,0 +1,32 @@
+# Enhanced Pipeline Requirements
+# Install with: pip install -r requirements_enhanced.txt
+
+# Core Data Processing
+pandas>=1.5.0
+numpy>=1.21.0
+scikit-learn>=1.0.0
+
+# For NCBI Taxonomy Integration
+biopython>=1.80
+
+# For PDF Report Generation
+reportlab>=4.0.0
+
+# For Visualization
+matplotlib>=3.5.0
+seaborn>=0.12.0
+Pillow>=9.0.0  # Image handling
+
+# For Deep Learning Models (Optional)
+torch>=1.10.0
+
+# For Excel Support
+openpyxl>=3.1.0
+
+# For Enhanced Logging
+coloredlogs>=15.0
+
+# Development Tools (Optional)
+jupyter>=1.0.0
+pytest>=7.0.0
+black>=22.0.0
