@@ -7,3 +7,58 @@ torch>=2.1
 matplotlib>=3.7
 seaborn>=0.13
 python-docx>=1.1
+
+# I’m checking the feature-engineering side now, because integrating FTIR into run_pipeline.py only makes sense if the downstream dataset builder can consume the selected sources cleanly.
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/enhanced_pipeline.py#1-1), lines 1 to 340
+
+# Searched for regex `FTIR|fuse|merge|get_unified_features|get_data|source selection|multi-source` (`Data_Science_AI` · `HPLC_GCMS_Fingerprint/**/*.py`), 20 results
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/ingestion/feature_engineering.py)
+
+# I need one more local check: whether the existing HPLC/GC-MS generator can already be extended in place, or whether FTIR must stay as a separate source with its own feature path. That determines whether I can make the combined-source menu work cleanly in one pass.
+
+# Searched for regex `generate_ftir|FTIR|wavenumber|sample_id` (`Data_Science_AI` · `HPLC_GCMS_Fingerprint/data_generation/**/*.py`), 9 results
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/data_generation/hplc_generator.py)
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/data_generation/gcms_generator.py)
+
+# I’ve got the path forward: add the source-selection prompt directly to run_pipeline.py, generate FTIR when chosen, and keep the existing ML/DL training only when the required HPLC + GCMS pair is present.
+
+# Generating patch (155 lines) in [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/run_pipeline.py)
+
+
+# ```
+
+# ```
+# The source-selection wiring is in; I’m validating the edit now because this kind of interactive-flow patch is easy to break with one quote or indentation mistake.
+
+# Checked [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/run_pipeline.py), no problems found
+
+# I’ve finished the integration and I’m grabbing the exact line anchors so I can tell you precisely what the new prompt does and where the HPLC+GCMS requirement is enforced.
+
+# Searched for regex `Step 0.6 – Generate Selected Source Inputs|Selected sources:|The current ML/DL multi-task model in this script requires BOTH HPLC and GC-MS inputs|DataSourceSelector` (`Data_Science_AI` · `HPLC_GCMS_Fingerprint/run_pipeline.py`), 5 results
+
+# Searched for regex `selected_sources=selected_sources|selected_sources:\s+list\[str\]|selected_sources = source_selector.ask_source_selection` (`Data_Science_AI` · `HPLC_GCMS_Fingerprint/run_pipeline.py`), 3 results
+
+# Integrated the source-selection flow into run_pipeline.py, so it now asks you which sources to use and can generate FTIR when selected. The FTIR dummy data is saved under `source_inputs/ftir_data.csv`, and the pipeline logs the chosen sources in the run metadata.
+
+# What this means in practice:
+# - If you select FTIR, it will now be generated and exported.
+# - If you select HPLC + GCMS, the existing ML/DL training path still runs as before.
+# - If you do not include both HPLC and GCMS, the script will stop after generating/saving the chosen sources, because the current multi-task model still depends on HPLC + GCMS targets/features.
+
+# The source-generation step is now in run_pipeline.py, and the HPLC+GCMS requirement is enforced in run_pipeline.py. The selected sources are also stored in the exported run summary in run_pipeline.py.
+
+# What is still useful:
+# - enhanced_pipeline.py is still useful if you want the more complete real multi-source loader/report workflow.
+# - I did not delete it yet because real-file multi-source loading is not fully wired into run_pipeline.py here. If you want, I can do that next and then remove the enhanced script cleanly.
+
+# If you want the next step, I’d suggest one of these:
+# 1. I wire real file loading for FTIR/HPLC/GCMS into run_pipeline.py too.
+# 2. I remove enhanced_pipeline.py after moving any remaining useful pieces into run_pipeline.py.
+# 3. I make FTIR contribute to model features, not just data generation/export.
+
+# Made changes. also add code and models data input requirements to the requirements.txt file, since the FTIR generator relies on pandas and numpy for data manipulation, and the ML/DL training relies on torch for model training. The updated requirements.txt now includes these dependencies to ensure that anyone running the pipeline has all the necessary libraries installed.
+# also add prediction code modification so that it can work on single data sources or multi-source inputs, depending on what the user selects during the source selection step. This way, the prediction code will be flexible and can handle different combinations of input data without breaking. The updated prediction code will check which sources were selected and adjust its processing accordingly to generate predictions based on the available data.
