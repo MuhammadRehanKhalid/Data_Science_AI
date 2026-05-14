@@ -337,6 +337,56 @@ def main() -> None:
     source_artifacts_dir.mkdir(parents=True, exist_ok=True)
     generated_sources: dict[str, pd.DataFrame] = {}
 
+    # Prepare source templates directory (example files user can paste into)
+    templates_dir = output_path.parent / "source_templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_templates():
+        """Write example CSV templates for FTIR, HPLC, and GCMS including dummy target columns."""
+        from HPLC_GCMS_Fingerprint.modules.sample_data_generator import SampleDataGenerator
+        from HPLC_GCMS_Fingerprint.data_generation.constants import N_HPLC_PEAKS, N_MZ_BINS, SOLVENTS, ASSAYS
+
+        gen = SampleDataGenerator()
+
+        # HPLC template
+        hplc_example = generate_hplc(n_replicates=1, random_seed=101)
+        hplc_path = templates_dir / "template_hplc.csv"
+        hplc_example.to_csv(hplc_path, index=False)
+
+        # GCMS template
+        gcms_example = generate_gcms(n_replicates=1, random_seed=102)
+        gcms_path = templates_dir / "template_gcms.csv"
+        gcms_example.to_csv(gcms_path, index=False)
+
+        # FTIR template: generate spectral cols and append activity/assay dummy cols
+        ftir_df = gen.generate_ftir_data(n_samples=1)
+        # Add activity and assay columns with dummy values so FTIR-only training is possible
+        for s in SOLVENTS:
+            ftir_df[f"activity_{s}"] = 0.0
+            for assay in ASSAYS:
+                ftir_df[f"{assay}_{s}"] = 0.0
+        ftir_path = templates_dir / "template_ftir.csv"
+        ftir_df.to_csv(ftir_path, index=False)
+
+        # README describing the template layout
+        readme = templates_dir / "README.txt"
+        readme.write_text(
+            (
+                "Templates for data sources.\n\n"
+                "- template_hplc.csv: HPLC fingerprint rows. Columns: sample_id, species, phylum, replicate, intensity_RT_01..intensity_RT_{n_hplc}, activity_<solvent>, <assay>_<solvent> for each assay.\n"
+                "- template_gcms.csv: GC-MS fingerprint rows. Columns: sample_id, species, phylum, replicate, intensity_mz_001..intensity_mz_{n_mz}, activity_<solvent>, <assay>_<solvent>.\n"
+                "- template_ftir.csv: FTIR spectral rows. Columns: sample_id, species, phylum, wn_<wavenumber>_.., plus activity_<solvent> and per-assay columns if you want FTIR-only training.\n\n"
+                "Guidelines: Replace the example rows with your experimental data. Ensure species and phylum columns are filled and that activity_<solvent> columns exist if you want training to build targets.\n"
+            ).format(n_hplc=N_HPLC_PEAKS, n_mz=N_MZ_BINS)
+        )
+
+    # write templates once
+    try:
+        _write_templates()
+        print(f"  Example data templates written to: {templates_dir}")
+    except Exception as exc:
+        print(f"  [WARN] Could not write templates: {exc}")
+
     if data_mode == "dummy":
         print("\n" + "="*60)
         print("  Step 0.6 – Generate Selected Source Inputs")
@@ -344,6 +394,14 @@ def main() -> None:
 
         if "FTIR" in selected_sources:
             ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
+            # Ensure FTIR dummy includes activity and per-assay columns so FTIR-only training is possible
+            from HPLC_GCMS_Fingerprint.data_generation.constants import SOLVENTS, ASSAYS
+            if not any(col.startswith("activity_") for col in ftir_df.columns):
+                rng = np.random.default_rng(123)
+                for s in SOLVENTS:
+                    ftir_df[f"activity_{s}"] = rng.uniform(0, 100, size=len(ftir_df))
+                    for assay in ASSAYS:
+                        ftir_df[f"{assay}_{s}"] = rng.uniform(0, 100, size=len(ftir_df))
             generated_sources["FTIR"] = ftir_df
             ftir_path = source_artifacts_dir / "ftir_data.csv"
             ftir_df.to_csv(ftir_path, index=False)
@@ -368,15 +426,14 @@ def main() -> None:
 
         if "HPLC" not in selected_sources or "GCMS" not in selected_sources:
             print(
-                "\n  [IMPORTANT] The current ML/DL multi-task model in this script requires BOTH HPLC and GC-MS inputs."
+                "\n  [NOTICE] You did not select both HPLC and GC-MS."
             )
             print(
-                "  You selected a source set that does not include both, so the script will stop after generating/saving the chosen sources."
+                "  The full multi-task ML/DL path performs best with both HPLC+GCMS,"
             )
             print(
-                "  To run the model training/evaluation path, re-run and choose HPLC + GCMS (FTIR can also be added as an extra source artifact)."
+                "  but the pipeline will continue: selected sources will be saved and the script will generate default HPLC/GCMS data for modelling if needed."
             )
-            return
 
     # ------------------------------------------------------------------
     # Step 1 & 2: Generate dummy data and export to Excel
@@ -414,8 +471,13 @@ def main() -> None:
     print("  Step 3 – Load, validate, engineer features")
     print("="*60)
 
-    dataset = MultiTaskDataset.from_excel(
-        output_path,
+    # Build dataset from available/generated sources so any combination is supported
+    from HPLC_GCMS_Fingerprint.ingestion.dataset import MultiTaskDataset
+
+    dataset = MultiTaskDataset.from_sources(
+        hplc_df=generated_sources.get("HPLC") if generated_sources.get("HPLC") is not None else hplc_df,
+        gcms_df=generated_sources.get("GCMS") if generated_sources.get("GCMS") is not None else gcms_df,
+        ftir_df=generated_sources.get("FTIR") if generated_sources.get("FTIR") is not None else None,
         representation=args.representation,
     )
     print(f"  {dataset}")

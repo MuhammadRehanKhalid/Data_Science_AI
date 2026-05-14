@@ -131,3 +131,37 @@ def load_and_validate(
         f"{len(gcms_df)} GC-MS samples."
     )
     return hplc_df, gcms_df, solvent_df
+
+
+def load_and_validate_optional(
+    path: str | Path,
+) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Load workbook and validate any of the expected sheets that are present.
+
+    Returns a tuple (hplc_df_or_None, gcms_df_or_None, solvent_df_or_None).
+    Unlike `load_and_validate`, this function does not require all sheets to be present.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Workbook not found: {path}")
+
+    sheets = pd.read_excel(path, sheet_name=None)
+
+    hplc_df = None
+    gcms_df = None
+    solvent_df = None
+
+    if HPLC_SHEET in sheets:
+        hplc_df = validate_schema(sheets[HPLC_SHEET].copy(), HPLC_SHEET)
+
+    if GCMS_SHEET in sheets:
+        gcms_df = validate_schema(sheets[GCMS_SHEET].copy(), GCMS_SHEET)
+
+    if SOLVENT_SHEET in sheets:
+        solvent_df = sheets[SOLVENT_SHEET].copy()
+
+    print(
+        f"[Loader] Workbook loaded. HPLC: {hplc_df is not None}, GC-MS: {gcms_df is not None}, Solvent sheet: {solvent_df is not None}"
+    )
+    return hplc_df, gcms_df, solvent_df

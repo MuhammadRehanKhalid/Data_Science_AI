@@ -116,8 +116,9 @@ def meta_features(df: pd.DataFrame, intensity_prefix: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def build_feature_matrix(
-    hplc_df: pd.DataFrame,
-    gcms_df: pd.DataFrame,
+    hplc_df: pd.DataFrame | None = None,
+    gcms_df: pd.DataFrame | None = None,
+    ftir_df: pd.DataFrame | None = None,
     representation: str = "combined",
     n_bins: int = 10,
 ) -> np.ndarray:
@@ -139,49 +140,56 @@ def build_feature_matrix(
     -------
     np.ndarray of shape (n_samples, n_features).
     """
+    # prefixes
     hplc_prefix = "intensity_RT_"
     gcms_prefix = "intensity_mz_"
+    ftir_prefix = "wn_"
 
-    builders = {
-        "raw":    lambda: np.hstack([
-            raw_features(hplc_df, hplc_prefix),
-            raw_features(gcms_df, gcms_prefix),
-        ]),
-        "binned": lambda: np.hstack([
-            binned_features(hplc_df, hplc_prefix, n_bins=n_bins),
-            binned_features(gcms_df, gcms_prefix, n_bins=n_bins),
-        ]),
-        "binary": lambda: np.hstack([
-            binary_features(hplc_df, hplc_prefix),
-            binary_features(gcms_df, gcms_prefix),
-        ]),
-        "meta":   lambda: np.hstack([
-            meta_features(hplc_df, hplc_prefix),
-            meta_features(gcms_df, gcms_prefix),
-        ]),
-        "combined": lambda: np.hstack([
-            raw_features(hplc_df,    hplc_prefix),
-            raw_features(gcms_df,    gcms_prefix),
-            binned_features(hplc_df, hplc_prefix, n_bins=n_bins),
-            binned_features(gcms_df, gcms_prefix, n_bins=n_bins),
-            binary_features(hplc_df, hplc_prefix),
-            binary_features(gcms_df, gcms_prefix),
-            meta_features(hplc_df,   hplc_prefix),
-            meta_features(gcms_df,   gcms_prefix),
-        ]),
-    }
+    if hplc_df is None and gcms_df is None and ftir_df is None:
+        raise ValueError("At least one data source (HPLC, GCMS or FTIR) must be provided")
 
-    if representation not in builders:
-        raise ValueError(
-            f"Unknown representation '{representation}'. "
-            f"Choose from: {list(builders.keys())}"
-        )
+    parts: list[np.ndarray] = []
 
-    X = builders[representation]()
-    print(
-        f"[FeatureEngineering] representation='{representation}' → "
-        f"X.shape={X.shape}"
-    )
+    def add_modality(df: pd.DataFrame | None, prefix: str):
+        if df is None:
+            return None
+        if representation == "raw":
+            return raw_features(df, prefix)
+        if representation == "binned":
+            return binned_features(df, prefix, n_bins=n_bins)
+        if representation == "binary":
+            return binary_features(df, prefix)
+        if representation == "meta":
+            return meta_features(df, prefix)
+        # combined
+        return np.hstack([
+            raw_features(df, prefix),
+            binned_features(df, prefix, n_bins=n_bins),
+            binary_features(df, prefix),
+            meta_features(df, prefix),
+        ])
+
+    # HPLC
+    hplc_part = add_modality(hplc_df, hplc_prefix)
+    if hplc_part is not None:
+        parts.append(hplc_part)
+
+    # GCMS
+    gcms_part = add_modality(gcms_df, gcms_prefix)
+    if gcms_part is not None:
+        parts.append(gcms_part)
+
+    # FTIR: FTIR often only benefits from raw + meta; keep binning optional
+    if ftir_df is not None:
+        if representation in {"raw", "binary", "meta"}:
+            ftir_part = add_modality(ftir_df, ftir_prefix)
+        else:
+            # for binned/combined use raw+meta for FTIR
+            ftir_part = np.hstack([raw_features(ftir_df, ftir_prefix), meta_features(ftir_df, ftir_prefix)])
+        parts.append(ftir_part)
+
+    X = np.hstack(parts)
+    print(f"[FeatureEngineering] representation='{representation}' → X.shape={X.shape}")
     return X
 
 

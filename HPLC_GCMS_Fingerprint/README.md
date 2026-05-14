@@ -90,6 +90,10 @@ Example – larger dataset, longer DL training:
 python run_pipeline.py --reps 30 --epochs 500
 ```
 
+### Data Layout Help
+
+If you want to prepare your own CSV files, use the schema guide in [data/source_templates/README.txt](data/source_templates/README.txt). It shows the required metadata, fingerprint columns, and target columns for FTIR, HPLC, GC-MS, and mixed-source training.
+
 ---
 
 ## Data Schema
