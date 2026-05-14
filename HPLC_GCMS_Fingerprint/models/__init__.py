@@ -1,6 +1,10 @@
 """models package."""
 
-from .ml_baseline import MLMultiTaskBaseline
+from .ml_baseline import (
+    MLMultiTaskBaseline,
+    MLMultiTaskSearchEstimator,
+    pack_multitask_targets,
+)
 from .model_registry import recommend_model, build_clf_pipeline, build_reg_pipeline
 
 try:
@@ -12,8 +16,10 @@ except ImportError:  # torch not installed
 
 __all__ = [
     "MLMultiTaskBaseline",
+    "MLMultiTaskSearchEstimator",
     "MultiTaskDLModel",
     "recommend_model",
     "build_clf_pipeline",
     "build_reg_pipeline",
+    "pack_multitask_targets",
 ]

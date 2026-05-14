@@ -1,0 +1,13 @@
+species,status,phylum,scientific_name,tax_id,suggestion
+Prorocentrum lima,PASS,Dinoflagellata,Prorocentrum lima,39448.0,
+Phaeodactylum tricornutum,PASS,Bacillariophyta,Phaeodactylum tricornutum,2850.0,
+Porphyridium purpureum,PASS,Rhodophyta,Porphyridium purpureum,35688.0,
+Ulva intestinalis,PASS,Chlorophyta,Ulva intestinalis,3116.0,
+Chlorella vulgaris,PASS,Chlorophyta,Chlorella vulgaris,3077.0,
+Asparagopsis taxiformis,PASS,Rhodophyta,Asparagopsis taxiformis,260499.0,
+Chromochloris zofingiensis,PASS,Chlorophyta,Chromochloris zofingiensis,31302.0,
+Spirulina major,PASS,Cyanobacteria,Spirulina major,270636.0,
+Alaria esculenta,PASS,Phaeophyceae,Alaria esculenta,2889.0,
+Sacchorhiza polyschides,PASS,Phaeophyceae,Polyschides,203169.0,
+Saccharina latissima,PASS,Phaeophyceae,Saccharina latissima,309358.0,
+Palmaria palmata,PASS,Rhodophyta,Palmaria palmata,2822.0,

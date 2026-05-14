@@ -138,11 +138,21 @@ class MultiTaskDataset:
         Return (train_dataset, test_dataset) with stratification on species.
         """
         idx = np.arange(len(self.X))
+        # Stratification requires at least 2 samples per class and enough room
+        # for the requested split. Fall back to an unstratified split when the
+        # dataset is too small for that constraint.
+        unique_species, species_counts = np.unique(self.species, return_counts=True)
+        can_stratify = (
+            len(unique_species) > 1
+            and species_counts.min() >= 2
+            and int(np.ceil(len(self.X) * test_size)) >= len(unique_species)
+            and int(np.floor(len(self.X) * (1.0 - test_size))) >= len(unique_species)
+        )
         tr_idx, te_idx = train_test_split(
             idx,
             test_size=test_size,
             random_state=random_state,
-            stratify=self.species,
+            stratify=self.species if can_stratify else None,
         )
         return self._subset(tr_idx), self._subset(te_idx)
 

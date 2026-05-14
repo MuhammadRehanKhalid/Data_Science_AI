@@ -1,0 +1,15 @@
+species_input,scientific_name,tax_id,rank,kingdom,phylum,class,order,family,genus,status,message
+Alaria esculenta,Alaria esculenta,2889.0,species,,,Phaeophyceae,Laminariales,Alariaceae,Alaria,SUCCESS,
+Asparagopsis taxiformis,Asparagopsis taxiformis,260499.0,species,,Rhodophyta,Florideophyceae,Bonnemaisoniales,Bonnemaisoniaceae,Asparagopsis,SUCCESS,
+Chlorella vulgaris,Chlorella vulgaris,3077.0,species,Viridiplantae,Chlorophyta,Trebouxiophyceae,Chlorellales,Chlorellaceae,Chlorella,SUCCESS,
+Chromochloris zofingiensis (green),,,,,,,,,,NOT_FOUND,Species not found in NCBI taxonomy database
+Chromochloris zofingiensis (orange),,,,,,,,,,NOT_FOUND,Species not found in NCBI taxonomy database
+Palmaria palmata,Palmaria palmata,2822.0,species,,Rhodophyta,Florideophyceae,Palmariales,Palmariaceae,Palmaria,SUCCESS,
+Phaeodactylum tricornutum,Phaeodactylum tricornutum,2850.0,species,,Bacillariophyta,Bacillariophyceae,Naviculales,Phaeodactylaceae,Phaeodactylum,SUCCESS,
+Porphyridium purpureum,Porphyridium purpureum,35688.0,species,,Rhodophyta,Bangiophyceae,Porphyridiales,Porphyridiaceae,Porphyridium,SUCCESS,
+Prorocentrum lima,Prorocentrum lima,39448.0,species,,,Dinophyceae,Prorocentrales,Prorocentraceae,Prorocentrum,SUCCESS,
+Saccharina latissima,Saccharina latissima,309358.0,species,,,Phaeophyceae,Laminariales,Laminariaceae,Saccharina,SUCCESS,
+Sacchorhiza polyschides,Polyschides,203169.0,genus,Metazoa,Mollusca,Scaphopoda,Gadilida,Siphonodentaliidae,,SUCCESS,
+Spirulina major,Spirulina major,270636.0,species,Bacillati,Cyanobacteriota,Cyanophyceae,Spirulinales,Spirulinaceae,Spirulina,SUCCESS,
+Ulva intestinalis,Ulva intestinalis,3116.0,species,Viridiplantae,Chlorophyta,Ulvophyceae,Ulvales,Ulvaceae,Ulva,SUCCESS,
+Chromochloris zofingiensis,Chromochloris zofingiensis,31302.0,species,Viridiplantae,Chlorophyta,Chlorophyceae,Sphaeropleales,Chromochloridaceae,Chromochloris,SUCCESS,

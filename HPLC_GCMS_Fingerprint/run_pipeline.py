@@ -34,8 +34,14 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from datetime import datetime
+import pandas as pd
+from typing import Any
+
+from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid, RandomizedSearchCV, StratifiedKFold
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
@@ -59,6 +65,7 @@ from HPLC_GCMS_Fingerprint.data_generation.constants import (
     ASSAYS,
     HPLC_RT_CENTERS,
     MZ_BIN_CENTERS,
+    PHYLA,
     SOLVENTS,
 )
 from HPLC_GCMS_Fingerprint.ingestion import MultiTaskDataset
@@ -69,7 +76,15 @@ from HPLC_GCMS_Fingerprint.evaluation import (
     print_results,
     recommend,
 )
-from HPLC_GCMS_Fingerprint.models import recommend_model
+from HPLC_GCMS_Fingerprint.models import (
+    MLMultiTaskSearchEstimator,
+    pack_multitask_targets,
+    recommend_model,
+)
+from HPLC_GCMS_Fingerprint.modules.taxonomy_fetcher import NCBITaxonomyFetcher
+from HPLC_GCMS_Fingerprint.modules.data_input_validator import DataSourceSelector
+from HPLC_GCMS_Fingerprint.modules.sample_data_generator import SampleDataGenerator
+from HPLC_GCMS_Fingerprint.modules.biodata_collector import BiodataCollector
 from HPLC_GCMS_Fingerprint.visualization import (
     plot_assay_boxplots,
     plot_assay_heatmap,
@@ -80,7 +95,9 @@ from HPLC_GCMS_Fingerprint.visualization import (
     plot_hplc_chromatogram,
     plot_phylum_assay_recommendation,
     plot_pca_biplot,
+    plot_phylogenetic_tree,
     plot_prediction_scatter,
+    plot_plsda_biplot,
     plot_radar_solvent,
     plot_solvent_assay_interaction,
     plot_solvent_barplots,
@@ -97,7 +114,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="HPLC/GC-MS Multi-Task Pipeline")
     p.add_argument(
         "--reps", type=int, default=15,
-        help="Replicates per species (default: 15 → 90 total samples)",
+        help="Replicates per species (default: 15 -> 90 total samples)",
     )
     p.add_argument(
         "--output", type=str, default="HPLC_GCMS_Fingerprint/data/fingerprint_data.xlsx",
@@ -171,6 +188,34 @@ def parse_args() -> argparse.Namespace:
             "on which ML/DL model to use, with a clear explanation."
         ),
     )
+    p.add_argument(
+        "--validate-species", action="store_true",
+        help=(
+            "Validate all species names against NCBI taxonomy before running "
+            "the pipeline. Useful for catching misspelled species names."
+        ),
+    )
+    p.add_argument(
+        "--skip-optimization", action="store_true",
+        help=(
+            "Skip hyperparameter optimization and use the exact ML/DL settings "
+            "provided via CLI."
+        ),
+    )
+    p.add_argument(
+        "--nested-cv", action="store_true",
+        help=(
+            "Run optional nested cross-validation on the training split for a "
+            "more publication-grade estimate of performance."
+        ),
+    )
+    p.add_argument(
+        "--publication-mode", action="store_true",
+        help=(
+            "Enable publication-style behavior: nested CV on, optimization on, "
+            "and full run metadata exports for reproducibility."
+        ),
+    )
     return p.parse_args()
 
 
@@ -182,6 +227,156 @@ def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
     figures_dir = Path(args.figures_dir)
+
+    if args.publication_mode:
+        args.nested_cv = True
+        args.skip_optimization = False
+        print("\n[Publication mode enabled] Nested CV and optimization are on; artifacts will be exported for reporting.")
+    
+    # ------------------------------------------------------------------
+    # Pre-flight Check: Validate Species Names (if requested)
+    # ------------------------------------------------------------------
+    if args.validate_species:
+        print("\n" + "="*60)
+        print("  Species Name Validation Check")
+        print("="*60)
+        
+        from HPLC_GCMS_Fingerprint.data_generation.constants import SPECIES
+        
+        fetcher = NCBITaxonomyFetcher(
+            cache_file=output_path.parent / "taxonomy_cache.csv"
+        )
+        validation_results = fetcher.validate_species_names(SPECIES)
+        
+        if validation_results['failed']:
+            print("\n[ERROR] Species validation failed!")
+            print("Please fix the following species names before running the pipeline:")
+            for species in validation_results['failed']:
+                print(f"  - {species}")
+            sys.exit(1)
+        else:
+            print("\n[OK] All species names validated successfully!")
+            print("Proceeding with pipeline...\n")
+    
+    # ------------------------------------------------------------------
+    # Step 0: Data Mode Selection (DUMMY or REAL)
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 0 – Data Mode Selection")
+    print("="*60)
+    
+    data_gen = SampleDataGenerator()
+    data_mode = data_gen.ask_data_mode()
+
+    source_selector = DataSourceSelector()
+    source_selector.print_welcome()
+    selected_sources = source_selector.ask_source_selection()
+    print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
+    
+    # For now, we'll use dummy mode (real mode would require user file input)
+    # The interactive choice has been presented
+    if data_mode == "real":
+        print("\n[NOTE] Real data mode is still wired for the HPLC/GC-MS workbook flow in this pipeline.")
+        print("[      The new source-selection prompt is available here, but real multi-file loading is not yet fully connected in this script.")
+        print("[      If you need that now, the enhanced multi-source loader still exists, but I can also wire it here next.")
+        data_mode = "dummy"
+    
+    print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
+    
+    # ------------------------------------------------------------------
+    # Step 0.5: Optional Biodata Collection
+    # ------------------------------------------------------------------
+    biodata_collector = None
+    biodata = None
+    add_biodata = input("\n" + "="*60 + 
+                       "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
+    
+    if add_biodata in ["y", "yes"]:
+        print("\n" + "="*60)
+        print("  Step 0.5 – Biodata & Growth Conditions Collection")
+        print("="*60)
+        
+        biodata_collector = BiodataCollector(
+            output_dir=output_path.parent / "biodata"
+        )
+        biodata_collector.print_welcome()
+        
+        # Collect experiment metadata
+        collect_exp = input("\nCollect experiment metadata? (y/n, default: y): ").strip().lower()
+        if collect_exp != "n":
+            biodata_collector.collect_experiment_metadata()
+        
+        # Collect growth conditions
+        collect_growth = input("\nCollect growth conditions? (y/n, default: y): ").strip().lower()
+        if collect_growth != "n":
+            biodata_collector.collect_growth_conditions()
+        
+        # Collect medium/nutrients
+        collect_medium = input("\nCollect medium and nutrient information? (y/n, default: y): ").strip().lower()
+        if collect_medium != "n":
+            biodata_collector.collect_medium_and_nutrients()
+        
+        # Collect environmental conditions
+        collect_env = input("\nCollect environmental conditions? (y/n, default: y): ").strip().lower()
+        if collect_env != "n":
+            biodata_collector.collect_environmental_conditions()
+        
+        # Save biodata
+        save_biodata = input("\nSave biodata to file? (y/n, default: y): ").strip().lower()
+        if save_biodata != "n":
+            biodata_collector.save_biodata(format="json")
+            print(f"[OK] Biodata saved to: {biodata_collector.output_dir}")
+        
+        biodata = biodata_collector.biodata
+        print("\n[OK] Biodata collection complete")
+    else:
+        print("\n[Skipping biodata collection]")
+
+    # Keep track of optional source-specific artifacts.
+    source_artifacts_dir = output_path.parent / "source_inputs"
+    source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    generated_sources: dict[str, pd.DataFrame] = {}
+
+    if data_mode == "dummy":
+        print("\n" + "="*60)
+        print("  Step 0.6 – Generate Selected Source Inputs")
+        print("="*60)
+
+        if "FTIR" in selected_sources:
+            ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
+            generated_sources["FTIR"] = ftir_df
+            ftir_path = source_artifacts_dir / "ftir_data.csv"
+            ftir_df.to_csv(ftir_path, index=False)
+            print(f"  FTIR samples generated: {len(ftir_df)}")
+            print(f"  FTIR saved to: {ftir_path}")
+
+        if "HPLC" in selected_sources:
+            hplc_preview = generate_hplc(n_replicates=args.reps, random_seed=42)
+            generated_sources["HPLC"] = hplc_preview
+            hplc_path = source_artifacts_dir / "hplc_data.csv"
+            hplc_preview.to_csv(hplc_path, index=False)
+            print(f"  HPLC samples generated: {len(hplc_preview)}")
+            print(f"  HPLC saved to: {hplc_path}")
+
+        if "GCMS" in selected_sources:
+            gcms_preview = generate_gcms(n_replicates=args.reps, random_seed=43)
+            generated_sources["GCMS"] = gcms_preview
+            gcms_path = source_artifacts_dir / "gcms_data.csv"
+            gcms_preview.to_csv(gcms_path, index=False)
+            print(f"  GC-MS samples generated: {len(gcms_preview)}")
+            print(f"  GC-MS saved to: {gcms_path}")
+
+        if "HPLC" not in selected_sources or "GCMS" not in selected_sources:
+            print(
+                "\n  [IMPORTANT] The current ML/DL multi-task model in this script requires BOTH HPLC and GC-MS inputs."
+            )
+            print(
+                "  You selected a source set that does not include both, so the script will stop after generating/saving the chosen sources."
+            )
+            print(
+                "  To run the model training/evaluation path, re-run and choose HPLC + GCMS (FTIR can also be added as an extra source artifact)."
+            )
+            return
 
     # ------------------------------------------------------------------
     # Step 1 & 2: Generate dummy data and export to Excel
@@ -198,6 +393,14 @@ def main() -> None:
     print(f"  HPLC columns : {len(hplc_df.columns)}")
     print(f"  GC-MS columns: {len(gcms_df.columns)}")
     print(f"  Assays       : {ASSAYS}")
+
+    if "FTIR" in selected_sources and "FTIR" not in generated_sources:
+        ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
+        generated_sources["FTIR"] = ftir_df
+        ftir_path = source_artifacts_dir / "ftir_data.csv"
+        ftir_df.to_csv(ftir_path, index=False)
+        print(f"  FTIR samples generated: {len(ftir_df)}")
+        print(f"  FTIR saved to: {ftir_path}")
 
     print("\n" + "="*60)
     print("  Step 2 – Export to Excel")
@@ -221,6 +424,23 @@ def main() -> None:
     print(f"  Train: {len(train_ds)} samples  |  Test: {len(test_ds)} samples")
 
     # ------------------------------------------------------------------
+    # Step 4a: Fetch taxonomy for the species present in the dataset
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 4a – Fetch NCBI taxonomy for all species")
+    print("="*60)
+    taxonomy_df = _fetch_taxonomy_table(
+        species_names=sorted(set(hplc_df["species"]).union(set(gcms_df["species"]))),
+        cache_path=output_path.parent / "taxonomy_cache.csv",
+        output_path=output_path.parent / "species_taxonomy.csv",
+    )
+    if not taxonomy_df.empty:
+        print(f"  Taxonomy records saved: {len(taxonomy_df)}")
+        print(f"  Unique species covered : {taxonomy_df['scientific_name'].nunique()}")
+    else:
+        print("  [No taxonomy records available]")
+
+    # ------------------------------------------------------------------
     # Step 4b: Model recommendation (optional)
     # ------------------------------------------------------------------
     if args.recommend_model:
@@ -232,46 +452,215 @@ def main() -> None:
         print(rec["reasoning"])
 
     # ------------------------------------------------------------------
+    # Step 4c: Hyperparameter optimization (optional)
+    # ------------------------------------------------------------------
+    selected_ml_clf = args.ml_clf
+    selected_ml_reg = args.ml_reg
+    selected_n_estimators_clf = 300
+    selected_n_estimators_reg = 200
+    ml_tuning_mode = "manual"
+    ml_search_results: dict[str, Any] | None = None
+    selected_dl_params = {
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": 1e-3,
+        "dropout": 0.3,
+        "patience": 40,
+    }
+
+    if not args.skip_optimization:
+        print("\n" + "="*60)
+        print("  Step 4c – Hyperparameter Optimization")
+        print("="*60)
+
+        opt_train_ds, opt_val_ds = train_ds.train_test_split(test_size=0.25, random_state=42)
+
+        use_sklearn_search = input(
+            "  Switch ML tuning to scikit-learn GridSearchCV/RandomizedSearchCV? (y/n, default: n): "
+        ).strip().lower()
+        if use_sklearn_search in {"y", "yes"}:
+            search_kind = input(
+                "  Choose search type [grid/randomized] (default: randomized): "
+            ).strip().lower() or "randomized"
+            ml_tuning_mode = "grid" if search_kind.startswith("g") else "randomized"
+            print(f"  [ML] Using sklearn {ml_tuning_mode.title()}SearchCV...")
+
+            ml_search = _run_ml_sklearn_search(
+                opt_train_ds,
+                search_mode=ml_tuning_mode,
+                random_state=42,
+            )
+            ml_search_results = ml_search
+            selected_ml_clf = ml_search["best_params"]["clf_type"]
+            selected_ml_reg = ml_search["best_params"]["reg_type"]
+            selected_n_estimators_clf = ml_search["best_params"]["n_estimators_clf"]
+            selected_n_estimators_reg = ml_search["best_params"]["n_estimators_reg"]
+            print(
+                "  [ML] Best params -> "
+                f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+                f"n_estimators_clf={selected_n_estimators_clf}, "
+                f"n_estimators_reg={selected_n_estimators_reg}, "
+                f"score={ml_search['best_score']:.4f}"
+            )
+        else:
+            print("  [ML] Using current manual tuning settings...")
+            ml_opt = _optimize_ml_configs(opt_train_ds, opt_val_ds)
+            selected_ml_clf = ml_opt["best"]["clf_type"]
+            selected_ml_reg = ml_opt["best"]["reg_type"]
+            selected_n_estimators_clf = ml_opt["best"]["n_estimators_clf"]
+            selected_n_estimators_reg = ml_opt["best"]["n_estimators_reg"]
+            print(
+                "  [ML] Best params -> "
+                f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+                f"n_estimators_clf={selected_n_estimators_clf}, "
+                f"n_estimators_reg={selected_n_estimators_reg}, "
+                f"score={ml_opt['best']['score']:.4f}"
+            )
+
+        if not args.skip_dl:
+            print("  [DL] Searching best training parameters...")
+            dl_opt = _optimize_dl_configs(opt_train_ds, opt_val_ds, base_epochs=args.epochs, base_batch_size=args.batch_size)
+            if dl_opt is not None:
+                selected_dl_params = dl_opt["best"]
+                print(
+                    "  [DL] Best params -> "
+                    f"lr={selected_dl_params['lr']}, "
+                    f"dropout={selected_dl_params['dropout']}, "
+                    f"batch_size={selected_dl_params['batch_size']}, "
+                    f"epochs={selected_dl_params['epochs']}, "
+                    f"score={selected_dl_params['score']:.4f}"
+                )
+
+    nested_cv_summary: dict[str, Any] = {}
+    if args.nested_cv:
+        print("\n" + "="*60)
+        print("  Step 4d – Nested Cross-Validation")
+        print("="*60)
+        nested_cv_summary["ml"] = _run_nested_cv_ml(
+            train_ds,
+            random_state=42,
+            outer_splits=3,
+            tuning_mode=ml_tuning_mode,
+        )
+        print(
+            "  [NESTED CV][ML] mean score = "
+            f"{nested_cv_summary['ml']['mean_score']:.4f} ± {nested_cv_summary['ml']['std_score']:.4f}"
+        )
+
+        if not args.skip_dl:
+            nested_cv_summary["dl"] = _run_nested_cv_dl(
+                train_ds,
+                random_state=42,
+                outer_splits=2,
+                base_epochs=selected_dl_params["epochs"],
+                base_batch_size=selected_dl_params["batch_size"],
+            )
+            print(
+                "  [NESTED CV][DL] mean score = "
+                f"{nested_cv_summary['dl']['mean_score']:.4f} ± {nested_cv_summary['dl']['std_score']:.4f}"
+            )
+
+    # ------------------------------------------------------------------
     # Step 5: ML baseline
     # ------------------------------------------------------------------
     print("\n" + "="*60)
     print("  Step 5 – Train ML Multi-Task Baseline (sklearn)")
     print("="*60)
-    print(f"  Classifier : {args.ml_clf}   |  Regressor: {args.ml_reg}")
+    print(f"  Classifier : {selected_ml_clf}   |  Regressor: {selected_ml_reg}")
 
     ml_model = train_ml(
         train_ds,
-        clf_type=args.ml_clf,
-        reg_type=args.ml_reg,
+        clf_type=selected_ml_clf,
+        reg_type=selected_ml_reg,
+        n_estimators_clf=selected_n_estimators_clf,
+        n_estimators_reg=selected_n_estimators_reg,
         random_state=42,
     )
     ml_results = evaluate_ml(ml_model, test_ds)
-    print_results(ml_results, model_name=f"ML Baseline ({args.ml_clf} + {args.ml_reg})")
+    print_results(ml_results, model_name=f"ML Baseline ({selected_ml_clf} + {selected_ml_reg})")
 
     # ------------------------------------------------------------------
     # Step 6 & 7: DL model
     # ------------------------------------------------------------------
     dl_model = None
     dl_history: list[dict] = []
+    dl_results: dict[str, Any] | None = None
 
     if not args.skip_dl:
         print("\n" + "="*60)
         print(f"  Step 6 – Train DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
         print("="*60)
 
+        # Keep the test split untouched for final unbiased reporting.
+        dl_train_ds, dl_val_ds = train_ds.train_test_split(test_size=0.2, random_state=42)
+
         dl_model, dl_history = train_dl(
-            train_ds,
-            test_ds,
-            epochs     = args.epochs,
-            batch_size = args.batch_size,
-            lr         = 1e-3,
-            dropout    = 0.3,
-            patience   = 40,
+            dl_train_ds,
+            dl_val_ds,
+            epochs     = selected_dl_params["epochs"],
+            batch_size = selected_dl_params["batch_size"],
+            lr         = selected_dl_params["lr"],
+            dropout    = selected_dl_params["dropout"],
+            patience   = selected_dl_params["patience"],
         )
         dl_results = evaluate_dl(dl_model, test_ds)
         print_results(dl_results, model_name=f"DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
     else:
         print("\n  [Skipping DL training as requested]")
+
+    # ------------------------------------------------------------------
+    # Step 7b: Best-model selection (ML vs DL)
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 7b – Select Best Model")
+    print("="*60)
+
+    model_scores: dict[str, float] = {
+        "ML": _aggregate_model_score(ml_results),
+    }
+    if dl_results is not None:
+        model_scores["DL"] = _aggregate_model_score(dl_results)
+
+    for model_name, score in model_scores.items():
+        print(f"  {model_name} aggregate score: {score:.4f}")
+
+    best_model_name = max(model_scores, key=model_scores.get)
+    print(f"\n  [BEST MODEL] {best_model_name} (highest aggregate score)")
+
+    if best_model_name == "ML":
+        print(
+            "  Selected config -> "
+            f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+            f"n_estimators_clf={selected_n_estimators_clf}, n_estimators_reg={selected_n_estimators_reg}"
+        )
+    elif dl_results is not None:
+        print(
+            "  Selected config -> "
+            f"lr={selected_dl_params['lr']}, dropout={selected_dl_params['dropout']}, "
+            f"batch_size={selected_dl_params['batch_size']}, epochs={selected_dl_params['epochs']}"
+        )
+
+    run_artifacts = _save_run_artifacts(
+        output_root=output_path.parent,
+        args=args,
+        dataset=dataset,
+        selected_sources=selected_sources,
+        selected_ml={
+            "clf": selected_ml_clf,
+            "reg": selected_ml_reg,
+            "n_estimators_clf": selected_n_estimators_clf,
+            "n_estimators_reg": selected_n_estimators_reg,
+        },
+        selected_dl=selected_dl_params if dl_results is not None else None,
+        ml_results=ml_results,
+        dl_results=dl_results,
+        best_model_name=best_model_name,
+        dl_history=dl_history,
+        nested_cv_summary=nested_cv_summary,
+        ml_tuning_mode=ml_tuning_mode,
+        ml_search_results=ml_search_results,
+    )
+    print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
 
     # ------------------------------------------------------------------
     # Step 8: Recommendation for a new sample
@@ -282,7 +671,7 @@ def main() -> None:
 
     x_new = test_ds.X[0]
 
-    print("\n  → ML Baseline recommendation:")
+    print("\n  -> ML Baseline recommendation:")
     rec_ml = recommend(
         ml_model, x_new,
         solvent_names=dataset.solvent_names,
@@ -294,7 +683,7 @@ def main() -> None:
     _print_recommendation(rec_ml)
 
     if dl_model is not None:
-        print("\n  → DL Model recommendation:")
+        print("\n  -> DL Model recommendation:")
         rec_dl = recommend(
             dl_model, x_new,
             solvent_names=dataset.solvent_names,
@@ -308,7 +697,7 @@ def main() -> None:
     true_species  = dataset.species_names[test_ds.species[0]]
     true_solvent  = test_ds.best_solvent[0]
     true_assay    = test_ds.best_assay[0]
-    print(f"\n  Ground truth → species: {true_species} | "
+    print(f"\n  Ground truth -> species: {true_species} | "
           f"best_solvent: {true_solvent} | best_assay: {true_assay}")
 
     # ------------------------------------------------------------------
@@ -322,6 +711,7 @@ def main() -> None:
             hplc_df=hplc_df,
             gcms_df=gcms_df,
             dataset=dataset,
+            taxonomy_df=taxonomy_df,
             train_ds=train_ds,
             test_ds=test_ds,
             ml_model=ml_model,
@@ -345,6 +735,7 @@ def _generate_figures(
     hplc_df,
     gcms_df,
     dataset,
+    taxonomy_df,
     train_ds,
     test_ds,
     ml_model,
@@ -400,6 +791,14 @@ def _generate_figures(
         phylum_labels=dataset.phylum,
         phylum_names=dataset.phylum_names,
         output_path=figures_dir / f"07_pca_biplot{ext}",
+    )
+
+    # 7b. PLS-DA biplot
+    plot_plsda_biplot(
+        X_raw=dataset.X,
+        phylum_labels=dataset.phylum,
+        phylum_names=dataset.phylum_names,
+        output_path=figures_dir / f"07b_plsda_biplot{ext}",
     )
 
     # 8. Confusion matrices – ML model
@@ -523,6 +922,29 @@ def _generate_figures(
         output_path=figures_dir / f"15_best_solvent_distribution{ext}",
     )
 
+    # 16. Taxonomy-based phylogenetic tree
+    plot_phylogenetic_tree(
+        taxonomy_df=taxonomy_df,
+        output_path=figures_dir / f"16_phylogenetic_tree{ext}",
+    )
+
+
+def _fetch_taxonomy_table(
+    *,
+    species_names: list[str],
+    cache_path: Path,
+    output_path: Path,
+) -> pd.DataFrame:
+    """Fetch and persist taxonomy rows for the species present in this run."""
+    fetcher = NCBITaxonomyFetcher(cache_file=cache_path)
+    taxonomy_df = fetcher.fetch_batch_taxonomy(species_names)
+    if not taxonomy_df.empty:
+        taxonomy_df["origin"] = taxonomy_df["species_input"].map(PHYLA).fillna(taxonomy_df.get("phylum", "Unknown"))
+        taxonomy_df["species_label"] = taxonomy_df["species_input"]
+    taxonomy_df.to_csv(output_path, index=False)
+    fetcher.save_cache()
+    return taxonomy_df
+
 
 def _print_recommendation(rec: dict) -> None:
     print(f"     Predicted species  : {rec['predicted_species']}")
@@ -537,6 +959,442 @@ def _print_recommendation(rec: dict) -> None:
         f"{k}={v:.3f}" for k, v in rec["assay_performances"].items()
     )
     print(f"     Assay performances : {ass_str}")
+
+
+def _aggregate_model_score(results: dict) -> float:
+    """
+    Convert multi-head metrics into a single comparable score (higher is better).
+
+    The score combines classification quality, recommendation accuracy, and
+    regression error terms mapped to a bounded [0, 1] utility.
+    """
+    cls_terms = [
+        float(results["species"]["accuracy"]),
+        float(results["species"]["f1_macro"]),
+        float(results["phylum"]["accuracy"]),
+        float(results["phylum"]["f1_macro"]),
+        float(results["best_solvent_accuracy"]),
+        float(results["best_assay_accuracy"]),
+    ]
+
+    regression_errors = [
+        float(results["solvents"]["MAE_overall"]),
+        float(results["solvents"]["RMSE_overall"]),
+        float(results["assays"]["MAE_overall"]),
+        float(results["assays"]["RMSE_overall"]),
+    ]
+    reg_terms = [1.0 / (1.0 + err) for err in regression_errors]
+
+    all_terms = cls_terms + reg_terms
+    return float(np.mean(all_terms))
+
+
+def _optimize_ml_configs(train_ds: MultiTaskDataset, val_ds: MultiTaskDataset) -> dict:
+    """Run a lightweight grid search over ML model families and key params."""
+    ml_trials: list[dict[str, Any]] = []
+
+    clf_candidates = ["random_forest", "gradient_boosting", "svm", "logistic_regression"]
+    reg_candidates = ["gradient_boosting", "random_forest", "ridge", "lasso"]
+
+    for clf_type in clf_candidates:
+        clf_est_grid = [300, 500] if clf_type in {"random_forest", "gradient_boosting"} else [300]
+        for reg_type in reg_candidates:
+            reg_est_grid = [200, 400] if reg_type in {"random_forest", "gradient_boosting"} else [200]
+
+            for n_estimators_clf in clf_est_grid:
+                for n_estimators_reg in reg_est_grid:
+                    try:
+                        model = train_ml(
+                            train_ds,
+                            clf_type=clf_type,
+                            reg_type=reg_type,
+                            n_estimators_clf=n_estimators_clf,
+                            n_estimators_reg=n_estimators_reg,
+                            random_state=42,
+                        )
+                        results = evaluate_ml(model, val_ds)
+                        score = _aggregate_model_score(results)
+                        ml_trials.append(
+                            {
+                                "clf_type": clf_type,
+                                "reg_type": reg_type,
+                                "n_estimators_clf": n_estimators_clf,
+                                "n_estimators_reg": n_estimators_reg,
+                                "score": score,
+                            }
+                        )
+                    except Exception as exc:
+                        print(
+                            "  [ML OPT] Skipping config "
+                            f"clf={clf_type}, reg={reg_type} due to error: {exc}"
+                        )
+
+    if not ml_trials:
+        return {
+            "best": {
+                "clf_type": "random_forest",
+                "reg_type": "gradient_boosting",
+                "n_estimators_clf": 300,
+                "n_estimators_reg": 200,
+                "score": -1.0,
+            },
+            "trials": [],
+        }
+
+    ml_trials.sort(key=lambda x: x["score"], reverse=True)
+    return {"best": ml_trials[0], "trials": ml_trials}
+
+
+def _optimize_dl_configs(
+    train_ds: MultiTaskDataset,
+    val_ds: MultiTaskDataset,
+    base_epochs: int,
+    base_batch_size: int,
+) -> dict[str, Any] | None:
+    """Run a compact DL hyperparameter search on validation data."""
+    dl_trials: list[dict[str, Any]] = []
+
+    search_configs = [
+        {"lr": 1e-3, "dropout": 0.3, "batch_size": base_batch_size},
+        {"lr": 5e-4, "dropout": 0.3, "batch_size": base_batch_size},
+        {"lr": 1e-3, "dropout": 0.2, "batch_size": max(8, base_batch_size)},
+    ]
+    tune_epochs = min(base_epochs, 120)
+    tune_patience = min(20, max(8, tune_epochs // 4))
+
+    for cfg in search_configs:
+        try:
+            model, _ = train_dl(
+                train_ds,
+                val_ds,
+                epochs=tune_epochs,
+                batch_size=cfg["batch_size"],
+                lr=cfg["lr"],
+                dropout=cfg["dropout"],
+                patience=tune_patience,
+            )
+            results = evaluate_dl(model, val_ds)
+            score = _aggregate_model_score(results)
+
+            dl_trials.append(
+                {
+                    "epochs": base_epochs,
+                    "batch_size": cfg["batch_size"],
+                    "lr": cfg["lr"],
+                    "dropout": cfg["dropout"],
+                    "patience": max(20, tune_patience),
+                    "score": score,
+                }
+            )
+        except Exception as exc:
+            print(
+                "  [DL OPT] Skipping config "
+                f"lr={cfg['lr']}, dropout={cfg['dropout']} due to error: {exc}"
+            )
+
+    if not dl_trials:
+        return None
+
+    dl_trials.sort(key=lambda x: x["score"], reverse=True)
+    return {"best": dl_trials[0], "trials": dl_trials}
+
+
+def _run_ml_sklearn_search(
+    train_ds: MultiTaskDataset,
+    search_mode: str = "randomized",
+    random_state: int = 42,
+    n_iter: int = 18,
+) -> dict[str, Any]:
+    """Run GridSearchCV or RandomizedSearchCV over the ML baseline parameters."""
+    param_space = {
+        "clf_type": ["random_forest", "gradient_boosting", "svm", "logistic_regression"],
+        "reg_type": ["gradient_boosting", "random_forest", "ridge", "lasso"],
+        "n_estimators_clf": [150, 300, 500],
+        "n_estimators_reg": [100, 200, 400],
+    }
+
+    X = train_ds.X
+    y = pack_multitask_targets(
+        train_ds.species,
+        train_ds.phylum,
+        train_ds.y_solvents,
+        train_ds.y_assays,
+    )
+    cv = KFold(n_splits=max(2, min(3, len(train_ds))), shuffle=True, random_state=random_state)
+    estimator = MLMultiTaskSearchEstimator(random_state=random_state)
+
+    if search_mode == "grid":
+        search = GridSearchCV(
+            estimator=estimator,
+            param_grid=param_space,
+            scoring=None,
+            cv=cv,
+            n_jobs=-1,
+            refit=True,
+        )
+    else:
+        total_combinations = len(ParameterGrid(param_space))
+        search = RandomizedSearchCV(
+            estimator=estimator,
+            param_distributions=param_space,
+            n_iter=min(n_iter, total_combinations),
+            scoring=None,
+            cv=cv,
+            random_state=random_state,
+            n_jobs=-1,
+            refit=True,
+        )
+
+    search.fit(X, y)
+
+    return {
+        "search_mode": search_mode,
+        "best_params": search.best_params_,
+        "best_score": float(search.best_score_),
+        "search_object": search,
+        "cv_results": pd.DataFrame(search.cv_results_),
+    }
+
+
+def _run_nested_cv_ml(
+    dataset: MultiTaskDataset,
+    random_state: int = 42,
+    outer_splits: int = 3,
+    tuning_mode: str = "manual",
+) -> dict[str, Any]:
+    """Nested CV for the ML baseline: inner tuning, outer unbiased scoring."""
+    outer_cv = StratifiedKFold(n_splits=outer_splits, shuffle=True, random_state=random_state)
+    fold_scores: list[float] = []
+    fold_params: list[dict[str, Any]] = []
+
+    for fold_idx, (tr_idx, va_idx) in enumerate(outer_cv.split(dataset.X, dataset.species), start=1):
+        outer_train = dataset._subset(tr_idx)
+        outer_val = dataset._subset(va_idx)
+        inner_train, inner_val = outer_train.train_test_split(test_size=0.25, random_state=random_state + fold_idx)
+
+        if tuning_mode in {"grid", "randomized"}:
+            tuned = _run_ml_sklearn_search(
+                inner_train,
+                search_mode=tuning_mode,
+                random_state=random_state + fold_idx,
+            )
+            best = tuned["best_params"]
+        else:
+            tuned = _optimize_ml_configs(inner_train, inner_val)
+            best = tuned["best"]
+        fold_params.append(best)
+
+        model = train_ml(
+            outer_train,
+            clf_type=best["clf_type"],
+            reg_type=best["reg_type"],
+            n_estimators_clf=best["n_estimators_clf"],
+            n_estimators_reg=best["n_estimators_reg"],
+            random_state=random_state,
+        )
+        results = evaluate_ml(model, outer_val)
+        score = _aggregate_model_score(results)
+        fold_scores.append(score)
+        print(
+            f"  [NESTED CV][ML] Fold {fold_idx}/{outer_splits}: "
+            f"score={score:.4f} | clf={best['clf_type']} reg={best['reg_type']}"
+        )
+
+    return {
+        "fold_scores": fold_scores,
+        "mean_score": float(np.mean(fold_scores)) if fold_scores else float("nan"),
+        "std_score": float(np.std(fold_scores)) if fold_scores else float("nan"),
+        "best_params_per_fold": fold_params,
+    }
+
+
+def _run_nested_cv_dl(
+    dataset: MultiTaskDataset,
+    random_state: int = 42,
+    outer_splits: int = 2,
+    base_epochs: int = 200,
+    base_batch_size: int = 16,
+) -> dict[str, Any]:
+    """Nested CV for the DL model: compact inner tuning with outer scoring."""
+    outer_cv = StratifiedKFold(n_splits=outer_splits, shuffle=True, random_state=random_state)
+    fold_scores: list[float] = []
+    fold_params: list[dict[str, Any]] = []
+
+    for fold_idx, (tr_idx, va_idx) in enumerate(outer_cv.split(dataset.X, dataset.species), start=1):
+        outer_train = dataset._subset(tr_idx)
+        outer_val = dataset._subset(va_idx)
+        inner_train, inner_val = outer_train.train_test_split(test_size=0.25, random_state=random_state + fold_idx)
+
+        tuned = _optimize_dl_configs(
+            inner_train,
+            inner_val,
+            base_epochs=min(base_epochs, 120),
+            base_batch_size=base_batch_size,
+        )
+        if tuned is None:
+            best = {
+                "epochs": min(base_epochs, 120),
+                "batch_size": base_batch_size,
+                "lr": 1e-3,
+                "dropout": 0.3,
+                "patience": 20,
+                "score": float("nan"),
+            }
+        else:
+            best = tuned["best"]
+        fold_params.append(best)
+
+        model, _ = train_dl(
+            outer_train,
+            outer_val,
+            epochs=best["epochs"],
+            batch_size=best["batch_size"],
+            lr=best["lr"],
+            dropout=best["dropout"],
+            patience=best["patience"],
+            random_state=random_state,
+        )
+        results = evaluate_dl(model, outer_val)
+        score = _aggregate_model_score(results)
+        fold_scores.append(score)
+        print(
+            f"  [NESTED CV][DL] Fold {fold_idx}/{outer_splits}: "
+            f"score={score:.4f} | lr={best['lr']} dropout={best['dropout']}"
+        )
+
+    return {
+        "fold_scores": fold_scores,
+        "mean_score": float(np.mean(fold_scores)) if fold_scores else float("nan"),
+        "std_score": float(np.std(fold_scores)) if fold_scores else float("nan"),
+        "best_params_per_fold": fold_params,
+    }
+
+
+def _save_run_artifacts(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    dataset,
+    selected_sources: list[str],
+    selected_ml: dict[str, Any],
+    selected_dl: dict[str, Any] | None,
+    ml_results: dict[str, Any],
+    dl_results: dict[str, Any] | None,
+    best_model_name: str,
+    dl_history: list[dict[str, Any]],
+    nested_cv_summary: dict[str, Any] | None = None,
+    ml_tuning_mode: str = "manual",
+    ml_search_results: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Persist run parameters and outcomes for reproducibility and publications."""
+    results_dir = output_root / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_path = results_dir / f"run_summary_{ts}.json"
+    ml_metrics_path = results_dir / f"metrics_ml_{ts}.csv"
+    dl_metrics_path = results_dir / f"metrics_dl_{ts}.csv"
+    dl_history_path = results_dir / f"dl_history_{ts}.csv"
+    nested_cv_ml_path = results_dir / f"nested_cv_ml_folds_{ts}.csv"
+    nested_cv_dl_path = results_dir / f"nested_cv_dl_folds_{ts}.csv"
+    nested_cv_params_path = results_dir / f"nested_cv_best_params_{ts}.csv"
+    ml_search_cv_results_path = results_dir / f"ml_search_cv_results_{ts}.csv"
+
+    score_board = {
+        "ML": _aggregate_model_score(ml_results),
+    }
+    if dl_results is not None:
+        score_board["DL"] = _aggregate_model_score(dl_results)
+
+    summary_payload = {
+        "timestamp": ts,
+        "cli_args": vars(args),
+        "data_summary": {
+            "n_samples": int(len(dataset)),
+            "n_features": int(dataset.X.shape[1]),
+            "n_species": int(len(dataset.species_names)),
+            "n_phyla": int(len(dataset.phylum_names)),
+            "n_solvents": int(len(dataset.solvent_names)),
+            "n_assays": int(len(dataset.assay_names)),
+        },
+        "selected_sources": selected_sources,
+        "selected_ml": selected_ml,
+        "selected_dl": selected_dl,
+        "score_board": score_board,
+        "best_model": best_model_name,
+        "nested_cv": nested_cv_summary or {},
+        "ml_tuning_mode": ml_tuning_mode,
+    }
+    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+
+    pd.DataFrame(_flatten_metrics_for_csv(ml_results, model_name="ML")).to_csv(
+        ml_metrics_path, index=False
+    )
+
+    if dl_results is not None:
+        pd.DataFrame(_flatten_metrics_for_csv(dl_results, model_name="DL")).to_csv(
+            dl_metrics_path, index=False
+        )
+
+    if dl_history:
+        pd.DataFrame(dl_history).to_csv(dl_history_path, index=False)
+
+    if nested_cv_summary:
+        nested_rows: list[dict[str, Any]] = []
+        for model_name, payload in nested_cv_summary.items():
+            fold_scores = payload.get("fold_scores", [])
+            best_params = payload.get("best_params_per_fold", [])
+            for fold_idx, score in enumerate(fold_scores, start=1):
+                row = {
+                    "model": model_name.upper(),
+                    "fold": fold_idx,
+                    "score": float(score),
+                    "mean_score": float(payload.get("mean_score", float("nan"))),
+                    "std_score": float(payload.get("std_score", float("nan"))),
+                }
+                if fold_idx - 1 < len(best_params):
+                    row.update({f"param_{k}": v for k, v in best_params[fold_idx - 1].items()})
+                nested_rows.append(row)
+
+        nested_df = pd.DataFrame(nested_rows)
+        if not nested_df.empty:
+            nested_df[nested_df["model"] == "ML"].to_csv(nested_cv_ml_path, index=False)
+            nested_df[nested_df["model"] == "DL"].to_csv(nested_cv_dl_path, index=False)
+            nested_df.to_csv(nested_cv_params_path, index=False)
+
+    if ml_search_results is not None:
+        cv_results = ml_search_results.get("cv_results")
+        if isinstance(cv_results, pd.DataFrame) and not cv_results.empty:
+            cv_results.to_csv(ml_search_cv_results_path, index=False)
+
+    return {
+        "summary_json": str(summary_path),
+        "ml_metrics_csv": str(ml_metrics_path),
+        "dl_metrics_csv": str(dl_metrics_path) if dl_results is not None else "",
+        "dl_history_csv": str(dl_history_path) if dl_history else "",
+        "nested_cv_ml_csv": str(nested_cv_ml_path) if nested_cv_summary else "",
+        "nested_cv_dl_csv": str(nested_cv_dl_path) if nested_cv_summary else "",
+        "nested_cv_params_csv": str(nested_cv_params_path) if nested_cv_summary else "",
+        "ml_search_cv_results_csv": str(ml_search_cv_results_path) if ml_search_results is not None else "",
+    }
+
+
+def _flatten_metrics_for_csv(results: dict[str, Any], model_name: str) -> list[dict[str, Any]]:
+    """Convert nested metrics dict into flat rows for easier article tables."""
+    rows = [
+        {"model": model_name, "metric": "species_accuracy", "value": float(results["species"]["accuracy"] )},
+        {"model": model_name, "metric": "species_f1_macro", "value": float(results["species"]["f1_macro"] )},
+        {"model": model_name, "metric": "phylum_accuracy", "value": float(results["phylum"]["accuracy"] )},
+        {"model": model_name, "metric": "phylum_f1_macro", "value": float(results["phylum"]["f1_macro"] )},
+        {"model": model_name, "metric": "solvents_mae", "value": float(results["solvents"]["MAE_overall"] )},
+        {"model": model_name, "metric": "solvents_rmse", "value": float(results["solvents"]["RMSE_overall"] )},
+        {"model": model_name, "metric": "assays_mae", "value": float(results["assays"]["MAE_overall"] )},
+        {"model": model_name, "metric": "assays_rmse", "value": float(results["assays"]["RMSE_overall"] )},
+        {"model": model_name, "metric": "best_solvent_accuracy", "value": float(results["best_solvent_accuracy"] )},
+        {"model": model_name, "metric": "best_assay_accuracy", "value": float(results["best_assay_accuracy"] )},
+        {"model": model_name, "metric": "aggregate_score", "value": _aggregate_model_score(results)},
+    ]
+    return rows
 
 
 if __name__ == "__main__":
