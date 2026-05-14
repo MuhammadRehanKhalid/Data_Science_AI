@@ -34,9 +34,12 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
+from datetime import datetime
 import pandas as pd
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
@@ -178,6 +181,20 @@ def parse_args() -> argparse.Namespace:
             "on which ML/DL model to use, with a clear explanation."
         ),
     )
+    p.add_argument(
+        "--validate-species", action="store_true",
+        help=(
+            "Validate all species names against NCBI taxonomy before running "
+            "the pipeline. Useful for catching misspelled species names."
+        ),
+    )
+    p.add_argument(
+        "--skip-optimization", action="store_true",
+        help=(
+            "Skip hyperparameter optimization and use the exact ML/DL settings "
+            "provided via CLI."
+        ),
+    )
     return p.parse_args()
 
 
@@ -189,6 +206,31 @@ def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
     figures_dir = Path(args.figures_dir)
+    
+    # ------------------------------------------------------------------
+    # Pre-flight Check: Validate Species Names (if requested)
+    # ------------------------------------------------------------------
+    if args.validate_species:
+        print("\n" + "="*60)
+        print("  Species Name Validation Check")
+        print("="*60)
+        
+        from HPLC_GCMS_Fingerprint.data_generation.constants import SPECIES
+        
+        fetcher = NCBITaxonomyFetcher(
+            cache_file=output_path.parent / "taxonomy_cache.csv"
+        )
+        validation_results = fetcher.validate_species_names(SPECIES)
+        
+        if validation_results['failed']:
+            print("\n[ERROR] Species validation failed!")
+            print("Please fix the following species names before running the pipeline:")
+            for species in validation_results['failed']:
+                print(f"  - {species}")
+            sys.exit(1)
+        else:
+            print("\n[OK] All species names validated successfully!")
+            print("Proceeding with pipeline...\n")
     
     # ------------------------------------------------------------------
     # Step 0: Data Mode Selection (DUMMY or REAL)
@@ -324,46 +366,152 @@ def main() -> None:
         print(rec["reasoning"])
 
     # ------------------------------------------------------------------
+    # Step 4c: Hyperparameter optimization (optional)
+    # ------------------------------------------------------------------
+    selected_ml_clf = args.ml_clf
+    selected_ml_reg = args.ml_reg
+    selected_n_estimators_clf = 300
+    selected_n_estimators_reg = 200
+    selected_dl_params = {
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": 1e-3,
+        "dropout": 0.3,
+        "patience": 40,
+    }
+
+    if not args.skip_optimization:
+        print("\n" + "="*60)
+        print("  Step 4c – Hyperparameter Optimization")
+        print("="*60)
+
+        opt_train_ds, opt_val_ds = train_ds.train_test_split(test_size=0.25, random_state=42)
+
+        print("  [ML] Searching best classifier/regressor combination...")
+        ml_opt = _optimize_ml_configs(opt_train_ds, opt_val_ds)
+        selected_ml_clf = ml_opt["best"]["clf_type"]
+        selected_ml_reg = ml_opt["best"]["reg_type"]
+        selected_n_estimators_clf = ml_opt["best"]["n_estimators_clf"]
+        selected_n_estimators_reg = ml_opt["best"]["n_estimators_reg"]
+        print(
+            "  [ML] Best params -> "
+            f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+            f"n_estimators_clf={selected_n_estimators_clf}, "
+            f"n_estimators_reg={selected_n_estimators_reg}, "
+            f"score={ml_opt['best']['score']:.4f}"
+        )
+
+        if not args.skip_dl:
+            print("  [DL] Searching best training parameters...")
+            dl_opt = _optimize_dl_configs(opt_train_ds, opt_val_ds, base_epochs=args.epochs, base_batch_size=args.batch_size)
+            if dl_opt is not None:
+                selected_dl_params = dl_opt["best"]
+                print(
+                    "  [DL] Best params -> "
+                    f"lr={selected_dl_params['lr']}, "
+                    f"dropout={selected_dl_params['dropout']}, "
+                    f"batch_size={selected_dl_params['batch_size']}, "
+                    f"epochs={selected_dl_params['epochs']}, "
+                    f"score={selected_dl_params['score']:.4f}"
+                )
+
+    # ------------------------------------------------------------------
     # Step 5: ML baseline
     # ------------------------------------------------------------------
     print("\n" + "="*60)
     print("  Step 5 – Train ML Multi-Task Baseline (sklearn)")
     print("="*60)
-    print(f"  Classifier : {args.ml_clf}   |  Regressor: {args.ml_reg}")
+    print(f"  Classifier : {selected_ml_clf}   |  Regressor: {selected_ml_reg}")
 
     ml_model = train_ml(
         train_ds,
-        clf_type=args.ml_clf,
-        reg_type=args.ml_reg,
+        clf_type=selected_ml_clf,
+        reg_type=selected_ml_reg,
+        n_estimators_clf=selected_n_estimators_clf,
+        n_estimators_reg=selected_n_estimators_reg,
         random_state=42,
     )
     ml_results = evaluate_ml(ml_model, test_ds)
-    print_results(ml_results, model_name=f"ML Baseline ({args.ml_clf} + {args.ml_reg})")
+    print_results(ml_results, model_name=f"ML Baseline ({selected_ml_clf} + {selected_ml_reg})")
 
     # ------------------------------------------------------------------
     # Step 6 & 7: DL model
     # ------------------------------------------------------------------
     dl_model = None
     dl_history: list[dict] = []
+    dl_results: dict[str, Any] | None = None
 
     if not args.skip_dl:
         print("\n" + "="*60)
         print(f"  Step 6 – Train DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
         print("="*60)
 
+        # Keep the test split untouched for final unbiased reporting.
+        dl_train_ds, dl_val_ds = train_ds.train_test_split(test_size=0.2, random_state=42)
+
         dl_model, dl_history = train_dl(
-            train_ds,
-            test_ds,
-            epochs     = args.epochs,
-            batch_size = args.batch_size,
-            lr         = 1e-3,
-            dropout    = 0.3,
-            patience   = 40,
+            dl_train_ds,
+            dl_val_ds,
+            epochs     = selected_dl_params["epochs"],
+            batch_size = selected_dl_params["batch_size"],
+            lr         = selected_dl_params["lr"],
+            dropout    = selected_dl_params["dropout"],
+            patience   = selected_dl_params["patience"],
         )
         dl_results = evaluate_dl(dl_model, test_ds)
         print_results(dl_results, model_name=f"DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
     else:
         print("\n  [Skipping DL training as requested]")
+
+    # ------------------------------------------------------------------
+    # Step 7b: Best-model selection (ML vs DL)
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 7b – Select Best Model")
+    print("="*60)
+
+    model_scores: dict[str, float] = {
+        "ML": _aggregate_model_score(ml_results),
+    }
+    if dl_results is not None:
+        model_scores["DL"] = _aggregate_model_score(dl_results)
+
+    for model_name, score in model_scores.items():
+        print(f"  {model_name} aggregate score: {score:.4f}")
+
+    best_model_name = max(model_scores, key=model_scores.get)
+    print(f"\n  [BEST MODEL] {best_model_name} (highest aggregate score)")
+
+    if best_model_name == "ML":
+        print(
+            "  Selected config -> "
+            f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+            f"n_estimators_clf={selected_n_estimators_clf}, n_estimators_reg={selected_n_estimators_reg}"
+        )
+    elif dl_results is not None:
+        print(
+            "  Selected config -> "
+            f"lr={selected_dl_params['lr']}, dropout={selected_dl_params['dropout']}, "
+            f"batch_size={selected_dl_params['batch_size']}, epochs={selected_dl_params['epochs']}"
+        )
+
+    run_artifacts = _save_run_artifacts(
+        output_root=output_path.parent,
+        args=args,
+        dataset=dataset,
+        selected_ml={
+            "clf": selected_ml_clf,
+            "reg": selected_ml_reg,
+            "n_estimators_clf": selected_n_estimators_clf,
+            "n_estimators_reg": selected_n_estimators_reg,
+        },
+        selected_dl=selected_dl_params if dl_results is not None else None,
+        ml_results=ml_results,
+        dl_results=dl_results,
+        best_model_name=best_model_name,
+        dl_history=dl_history,
+    )
+    print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
 
     # ------------------------------------------------------------------
     # Step 8: Recommendation for a new sample
@@ -662,6 +810,228 @@ def _print_recommendation(rec: dict) -> None:
         f"{k}={v:.3f}" for k, v in rec["assay_performances"].items()
     )
     print(f"     Assay performances : {ass_str}")
+
+
+def _aggregate_model_score(results: dict) -> float:
+    """
+    Convert multi-head metrics into a single comparable score (higher is better).
+
+    The score combines classification quality, recommendation accuracy, and
+    regression error terms mapped to a bounded [0, 1] utility.
+    """
+    cls_terms = [
+        float(results["species"]["accuracy"]),
+        float(results["species"]["f1_macro"]),
+        float(results["phylum"]["accuracy"]),
+        float(results["phylum"]["f1_macro"]),
+        float(results["best_solvent_accuracy"]),
+        float(results["best_assay_accuracy"]),
+    ]
+
+    regression_errors = [
+        float(results["solvents"]["MAE_overall"]),
+        float(results["solvents"]["RMSE_overall"]),
+        float(results["assays"]["MAE_overall"]),
+        float(results["assays"]["RMSE_overall"]),
+    ]
+    reg_terms = [1.0 / (1.0 + err) for err in regression_errors]
+
+    all_terms = cls_terms + reg_terms
+    return float(np.mean(all_terms))
+
+
+def _optimize_ml_configs(train_ds: MultiTaskDataset, val_ds: MultiTaskDataset) -> dict:
+    """Run a lightweight grid search over ML model families and key params."""
+    ml_trials: list[dict[str, Any]] = []
+
+    clf_candidates = ["random_forest", "gradient_boosting", "svm", "logistic_regression"]
+    reg_candidates = ["gradient_boosting", "random_forest", "ridge", "lasso"]
+
+    for clf_type in clf_candidates:
+        clf_est_grid = [300, 500] if clf_type in {"random_forest", "gradient_boosting"} else [300]
+        for reg_type in reg_candidates:
+            reg_est_grid = [200, 400] if reg_type in {"random_forest", "gradient_boosting"} else [200]
+
+            for n_estimators_clf in clf_est_grid:
+                for n_estimators_reg in reg_est_grid:
+                    try:
+                        model = train_ml(
+                            train_ds,
+                            clf_type=clf_type,
+                            reg_type=reg_type,
+                            n_estimators_clf=n_estimators_clf,
+                            n_estimators_reg=n_estimators_reg,
+                            random_state=42,
+                        )
+                        results = evaluate_ml(model, val_ds)
+                        score = _aggregate_model_score(results)
+                        ml_trials.append(
+                            {
+                                "clf_type": clf_type,
+                                "reg_type": reg_type,
+                                "n_estimators_clf": n_estimators_clf,
+                                "n_estimators_reg": n_estimators_reg,
+                                "score": score,
+                            }
+                        )
+                    except Exception as exc:
+                        print(
+                            "  [ML OPT] Skipping config "
+                            f"clf={clf_type}, reg={reg_type} due to error: {exc}"
+                        )
+
+    if not ml_trials:
+        return {
+            "best": {
+                "clf_type": "random_forest",
+                "reg_type": "gradient_boosting",
+                "n_estimators_clf": 300,
+                "n_estimators_reg": 200,
+                "score": -1.0,
+            },
+            "trials": [],
+        }
+
+    ml_trials.sort(key=lambda x: x["score"], reverse=True)
+    return {"best": ml_trials[0], "trials": ml_trials}
+
+
+def _optimize_dl_configs(
+    train_ds: MultiTaskDataset,
+    val_ds: MultiTaskDataset,
+    base_epochs: int,
+    base_batch_size: int,
+) -> dict[str, Any] | None:
+    """Run a compact DL hyperparameter search on validation data."""
+    dl_trials: list[dict[str, Any]] = []
+
+    search_configs = [
+        {"lr": 1e-3, "dropout": 0.3, "batch_size": base_batch_size},
+        {"lr": 5e-4, "dropout": 0.3, "batch_size": base_batch_size},
+        {"lr": 1e-3, "dropout": 0.2, "batch_size": max(8, base_batch_size)},
+    ]
+    tune_epochs = min(base_epochs, 120)
+    tune_patience = min(20, max(8, tune_epochs // 4))
+
+    for cfg in search_configs:
+        try:
+            model, _ = train_dl(
+                train_ds,
+                val_ds,
+                epochs=tune_epochs,
+                batch_size=cfg["batch_size"],
+                lr=cfg["lr"],
+                dropout=cfg["dropout"],
+                patience=tune_patience,
+            )
+            results = evaluate_dl(model, val_ds)
+            score = _aggregate_model_score(results)
+
+            dl_trials.append(
+                {
+                    "epochs": base_epochs,
+                    "batch_size": cfg["batch_size"],
+                    "lr": cfg["lr"],
+                    "dropout": cfg["dropout"],
+                    "patience": max(20, tune_patience),
+                    "score": score,
+                }
+            )
+        except Exception as exc:
+            print(
+                "  [DL OPT] Skipping config "
+                f"lr={cfg['lr']}, dropout={cfg['dropout']} due to error: {exc}"
+            )
+
+    if not dl_trials:
+        return None
+
+    dl_trials.sort(key=lambda x: x["score"], reverse=True)
+    return {"best": dl_trials[0], "trials": dl_trials}
+
+
+def _save_run_artifacts(
+    *,
+    output_root: Path,
+    args: argparse.Namespace,
+    dataset,
+    selected_ml: dict[str, Any],
+    selected_dl: dict[str, Any] | None,
+    ml_results: dict[str, Any],
+    dl_results: dict[str, Any] | None,
+    best_model_name: str,
+    dl_history: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Persist run parameters and outcomes for reproducibility and publications."""
+    results_dir = output_root / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_path = results_dir / f"run_summary_{ts}.json"
+    ml_metrics_path = results_dir / f"metrics_ml_{ts}.csv"
+    dl_metrics_path = results_dir / f"metrics_dl_{ts}.csv"
+    dl_history_path = results_dir / f"dl_history_{ts}.csv"
+
+    score_board = {
+        "ML": _aggregate_model_score(ml_results),
+    }
+    if dl_results is not None:
+        score_board["DL"] = _aggregate_model_score(dl_results)
+
+    summary_payload = {
+        "timestamp": ts,
+        "cli_args": vars(args),
+        "data_summary": {
+            "n_samples": int(len(dataset)),
+            "n_features": int(dataset.X.shape[1]),
+            "n_species": int(len(dataset.species_names)),
+            "n_phyla": int(len(dataset.phylum_names)),
+            "n_solvents": int(len(dataset.solvent_names)),
+            "n_assays": int(len(dataset.assay_names)),
+        },
+        "selected_ml": selected_ml,
+        "selected_dl": selected_dl,
+        "score_board": score_board,
+        "best_model": best_model_name,
+    }
+    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+
+    pd.DataFrame(_flatten_metrics_for_csv(ml_results, model_name="ML")).to_csv(
+        ml_metrics_path, index=False
+    )
+
+    if dl_results is not None:
+        pd.DataFrame(_flatten_metrics_for_csv(dl_results, model_name="DL")).to_csv(
+            dl_metrics_path, index=False
+        )
+
+    if dl_history:
+        pd.DataFrame(dl_history).to_csv(dl_history_path, index=False)
+
+    return {
+        "summary_json": str(summary_path),
+        "ml_metrics_csv": str(ml_metrics_path),
+        "dl_metrics_csv": str(dl_metrics_path) if dl_results is not None else "",
+        "dl_history_csv": str(dl_history_path) if dl_history else "",
+    }
+
+
+def _flatten_metrics_for_csv(results: dict[str, Any], model_name: str) -> list[dict[str, Any]]:
+    """Convert nested metrics dict into flat rows for easier article tables."""
+    rows = [
+        {"model": model_name, "metric": "species_accuracy", "value": float(results["species"]["accuracy"] )},
+        {"model": model_name, "metric": "species_f1_macro", "value": float(results["species"]["f1_macro"] )},
+        {"model": model_name, "metric": "phylum_accuracy", "value": float(results["phylum"]["accuracy"] )},
+        {"model": model_name, "metric": "phylum_f1_macro", "value": float(results["phylum"]["f1_macro"] )},
+        {"model": model_name, "metric": "solvents_mae", "value": float(results["solvents"]["MAE_overall"] )},
+        {"model": model_name, "metric": "solvents_rmse", "value": float(results["solvents"]["RMSE_overall"] )},
+        {"model": model_name, "metric": "assays_mae", "value": float(results["assays"]["MAE_overall"] )},
+        {"model": model_name, "metric": "assays_rmse", "value": float(results["assays"]["RMSE_overall"] )},
+        {"model": model_name, "metric": "best_solvent_accuracy", "value": float(results["best_solvent_accuracy"] )},
+        {"model": model_name, "metric": "best_assay_accuracy", "value": float(results["best_assay_accuracy"] )},
+        {"model": model_name, "metric": "aggregate_score", "value": _aggregate_model_score(results)},
+    ]
+    return rows
 
 
 if __name__ == "__main__":

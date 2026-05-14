@@ -61,10 +61,10 @@ class NCBITaxonomyFetcher:
         """
         
         if use_cache and species_name in self.cache:
-            logger.info(f"✓ Using cached taxonomy for {species_name}")
+            logger.info(f"[OK] Using cached taxonomy for {species_name}")
             return self.cache[species_name]
         
-        logger.info(f"→ Fetching taxonomy for: {species_name}")
+        logger.info(f"-> Fetching taxonomy for: {species_name}")
         
         try:
             # Search NCBI taxonomy database
@@ -80,7 +80,7 @@ class NCBITaxonomyFetcher:
                 # Fallback: Try base name without suffixes (e.g., remove "(green)", "(orange)")
                 base_name = species_name.split("(")[0].strip()
                 if base_name != species_name:
-                    logger.info(f"→ Fallback: Trying base name '{base_name}' after suffix removal")
+                    logger.info(f"-> Fallback: Trying base name '{base_name}' after suffix removal")
                     return self.fetch_taxonomy(base_name, use_cache=use_cache)
                 
                 result = {
@@ -128,7 +128,7 @@ class NCBITaxonomyFetcher:
             }
             
             self.cache[species_name] = result
-            logger.info(f"✓ Successfully fetched: {result['scientific_name']} "
+            logger.info(f"[OK] Successfully fetched: {result['scientific_name']} "
                        f"(Phylum: {result['phylum']})")
             
             return result
@@ -171,7 +171,7 @@ class NCBITaxonomyFetcher:
         if self.cache_file:
             df = pd.DataFrame(list(self.cache.values()))
             df.to_csv(self.cache_file, index=False)
-            logger.info(f"✓ Cache saved to {self.cache_file}")
+            logger.info(f"[OK] Cache saved to {self.cache_file}")
     
     def _load_cache(self):
         """Load cache from CSV file."""
@@ -180,7 +180,112 @@ class NCBITaxonomyFetcher:
             for _, row in df.iterrows():
                 species = row["species_input"]
                 self.cache[species] = row.to_dict()
-            logger.info(f"✓ Loaded {len(self.cache)} cached entries")
+            logger.info(f"[OK] Loaded {len(self.cache)} cached entries")
+    
+    def validate_species_names(self, species_list: List[str]) -> Dict[str, Dict]:
+        """
+        Validate all species names against NCBI taxonomy.
+        
+        Parameters
+        ----------
+        species_list : List[str]
+            List of species names to validate
+            
+        Returns
+        -------
+        dict
+            Validation results with keys:
+            - 'passed': List of species that were found
+            - 'failed': List of species that were NOT found
+            - 'details': Full details for each species
+        """
+        results = {
+            'passed': [],
+            'failed': [],
+            'details': {}
+        }
+        
+        print("\n" + "="*70)
+        print("  SPECIES NAME VALIDATION")
+        print("="*70)
+        print(f"\nValidating {len(species_list)} species names against NCBI...\n")
+        
+        for i, species in enumerate(species_list, 1):
+            print(f"  [{i}/{len(species_list)}] {species}...", end=" ", flush=True)
+            
+            taxonomy = self.fetch_taxonomy(species, use_cache=True)
+            
+            if taxonomy.get('status') == 'SUCCESS':
+                print("[PASS]")
+                results['passed'].append(species)
+                results['details'][species] = {
+                    'status': 'PASS',
+                    'scientific_name': taxonomy.get('scientific_name', species),
+                    'phylum': taxonomy.get('phylum', 'Unknown'),
+                    'tax_id': taxonomy.get('tax_id', '')
+                }
+            else:
+                print("[FAIL]")
+                results['failed'].append(species)
+                results['details'][species] = {
+                    'status': 'FAIL',
+                    'message': taxonomy.get('message', 'Not found in NCBI taxonomy'),
+                    'suggestion': self._suggest_correction(species)
+                }
+        
+        # Print summary
+        print("\n" + "="*70)
+        print("  VALIDATION SUMMARY")
+        print("="*70)
+        print(f"\nPassed : {len(results['passed'])}/{len(species_list)}")
+        print(f"Failed : {len(results['failed'])}/{len(species_list)}")
+        
+        if results['passed']:
+            print("\n[OK] Species found in NCBI:")
+            for sp in results['passed']:
+                 print(f"  [OK] {sp}")
+        
+        if results['failed']:
+            print("\n[ERROR] Species NOT found in NCBI:")
+            for sp in results['failed']:
+                suggestion = results['details'][sp].get('suggestion', '')
+                print(f"  [FAIL] {sp}")
+                if suggestion:
+                    print(f"    -> Suggestion: {suggestion}")
+        
+        return results
+    
+    def _suggest_correction(self, species_name: str) -> str:
+        """
+        Suggest a possible correction for a misspelled species name.
+        
+        Parameters
+        ----------
+        species_name : str
+            The invalid species name
+            
+        Returns
+        -------
+        str
+            Suggested correction or empty string
+        """
+        # Try base name without parenthetical suffixes
+        if '(' in species_name and ')' in species_name:
+            base_name = species_name.split('(')[0].strip()
+            return f"Try '{base_name}' (remove suffix)"
+        
+        # Try common misspellings
+        common_fixes = {
+            'zofingiensis': 'Check spelling: Chromochloris zofingiensis',
+            'vulgaris': 'Check spelling: Chlorella vulgaris',
+            'tricornutum': 'Check spelling: Phaeodactylum tricornutum',
+        }
+        
+        for keyword, suggestion in common_fixes.items():
+            if keyword in species_name.lower():
+                return suggestion
+        
+        return ""
 
 
 # ============================================================
@@ -258,7 +363,7 @@ class PredictionTaxonomyTracer:
         """Save prediction traces to CSV."""
         df = self.get_traces_dataframe()
         df.to_csv(output_path, index=False)
-        logger.info(f"✓ Prediction traces saved to {output_path}")
+        logger.info(f"[OK] Prediction traces saved to {output_path}")
 
 
 # ============================================================

@@ -1117,8 +1117,8 @@ def plot_phylogenetic_tree(
         ax.legend(
             handles=legend_handles,
             title="Phylum / origin",
-            loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
+            loc="center left",
+            bbox_to_anchor=(1.28, 0.5),
             fontsize=8,
             title_fontsize=9,
             borderaxespad=0.0,
