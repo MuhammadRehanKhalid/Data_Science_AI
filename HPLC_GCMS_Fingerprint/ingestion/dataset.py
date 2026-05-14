@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -22,6 +23,28 @@ from .loader import load_and_validate
 
 # Imported to expose downstream
 from ..data_generation.constants import ASSAYS, SOLVENTS
+
+
+def _impute_non_finite_array(arr: np.ndarray, name: str) -> np.ndarray:
+    """Replace NaN/inf values column-wise using finite medians (fallback: 0.0)."""
+    out = np.asarray(arr, dtype=float).copy()
+    if out.ndim != 2:
+        return out
+
+    finite_mask = np.isfinite(out)
+    if finite_mask.all():
+        return out
+
+    n_bad = int((~finite_mask).sum())
+    for j in range(out.shape[1]):
+        col = out[:, j]
+        good = np.isfinite(col)
+        fill_value = float(np.median(col[good])) if np.any(good) else 0.0
+        col[~good] = fill_value
+        out[:, j] = col
+
+    print(f"[Dataset] Imputed {n_bad} non-finite values in {name}.")
+    return out
 
 
 @dataclass
@@ -114,6 +137,10 @@ class MultiTaskDataset:
 
         targets = build_targets(target_df, solvents=SOLVENTS, assays=ASSAYS)
 
+        X = _impute_non_finite_array(X, name="feature matrix")
+        targets["y_solvents"] = _impute_non_finite_array(targets["y_solvents"], name="solvent targets")
+        targets["y_assays"] = _impute_non_finite_array(targets["y_assays"], name="assay targets")
+
         scaler = None
         if standardise:
             scaler = StandardScaler()
@@ -205,6 +232,10 @@ class MultiTaskDataset:
             )
 
         targets = build_targets(target_df, solvents=SOLVENTS, assays=ASSAYS)
+
+        X = _impute_non_finite_array(X, name="feature matrix")
+        targets["y_solvents"] = _impute_non_finite_array(targets["y_solvents"], name="solvent targets")
+        targets["y_assays"] = _impute_non_finite_array(targets["y_assays"], name="assay targets")
 
         scaler = None
         if standardise:

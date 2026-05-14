@@ -101,6 +101,7 @@ from HPLC_GCMS_Fingerprint.modules.taxonomy_fetcher import NCBITaxonomyFetcher
 from HPLC_GCMS_Fingerprint.modules.data_input_validator import DataSourceSelector
 from HPLC_GCMS_Fingerprint.modules.sample_data_generator import SampleDataGenerator
 from HPLC_GCMS_Fingerprint.modules.biodata_collector import BiodataCollector
+from HPLC_GCMS_Fingerprint.modules.real_data_loader import RealDataLoader, prompt_for_real_data
 from HPLC_GCMS_Fingerprint.visualization import (
     plot_assay_boxplots,
     plot_assay_heatmap,
@@ -476,14 +477,6 @@ def main() -> None:
     selected_sources = source_selector.ask_source_selection()
     print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
     
-    # For now, we'll use dummy mode (real mode would require user file input)
-    # The interactive choice has been presented
-    if data_mode == "real":
-        print("\n[NOTE] Real data mode is still wired for the HPLC/GC-MS workbook flow in this pipeline.")
-        print("[      The new source-selection prompt is available here, but real multi-file loading is not yet fully connected in this script.")
-        print("[      If you need that now, the enhanced multi-source loader still exists, but I can also wire it here next.")
-        data_mode = "dummy"
-    
     print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
     
     # ------------------------------------------------------------------
@@ -590,10 +583,44 @@ def main() -> None:
     except Exception as exc:
         print(f"  [WARN] Could not write templates: {exc}")
 
-    if data_mode == "dummy":
-        print("\n" + "="*60)
-        print("  Step 0.6 – Generate Selected Source Inputs")
-        print("="*60)
+    # ------------------------------------------------------------------
+    # Step 0.6 – Load Data (Real or Dummy)
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 0.6 – Load Data for Selected Sources")
+    print("="*60)
+
+    hplc_df = None
+    gcms_df = None
+    ftir_df = None
+
+    if data_mode == "real":
+        print(f"\n[Real Data Mode] Loading data for: {', '.join(selected_sources)}")
+        
+        # Use the real data loader to load from files
+        real_data = prompt_for_real_data(selected_sources)
+        
+        hplc_df = real_data.get("HPLC")
+        gcms_df = real_data.get("GCMS")
+        ftir_df = real_data.get("FTIR")
+        
+        # Validate that at least one source was loaded
+        loaded_count = sum(1 for v in real_data.values() if v is not None)
+        if loaded_count == 0:
+            print("\n[ERROR] No data files were loaded successfully.")
+            print("Please check your files and run again.")
+            sys.exit(1)
+        
+        print(f"\n[OK] Loaded {loaded_count} source(s)")
+        if hplc_df is not None:
+            print(f"  HPLC: {len(hplc_df)} samples, {len(hplc_df.columns)} columns")
+        if gcms_df is not None:
+            print(f"  GCMS: {len(gcms_df)} samples, {len(gcms_df.columns)} columns")
+        if ftir_df is not None:
+            print(f"  FTIR: {len(ftir_df)} samples, {len(ftir_df.columns)} columns")
+
+    else:  # dummy mode
+        print(f"\n[Dummy Data Mode] Generating data for: {', '.join(selected_sources)}")
 
         if "FTIR" in selected_sources:
             ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
@@ -609,64 +636,62 @@ def main() -> None:
             ftir_path = source_artifacts_dir / "ftir_data.csv"
             ftir_df.to_csv(ftir_path, index=False)
             print(f"  FTIR samples generated: {len(ftir_df)}")
-            print(f"  FTIR saved to: {ftir_path}")
 
         if "HPLC" in selected_sources:
-            hplc_preview = generate_hplc(n_replicates=args.reps, random_seed=42)
-            generated_sources["HPLC"] = hplc_preview
+            hplc_df = generate_hplc(n_replicates=args.reps, random_seed=42)
+            generated_sources["HPLC"] = hplc_df
             hplc_path = source_artifacts_dir / "hplc_data.csv"
-            hplc_preview.to_csv(hplc_path, index=False)
-            print(f"  HPLC samples generated: {len(hplc_preview)}")
-            print(f"  HPLC saved to: {hplc_path}")
+            hplc_df.to_csv(hplc_path, index=False)
+            print(f"  HPLC samples generated: {len(hplc_df)}")
 
         if "GCMS" in selected_sources:
-            gcms_preview = generate_gcms(n_replicates=args.reps, random_seed=43)
-            generated_sources["GCMS"] = gcms_preview
+            gcms_df = generate_gcms(n_replicates=args.reps, random_seed=43)
+            generated_sources["GCMS"] = gcms_df
             gcms_path = source_artifacts_dir / "gcms_data.csv"
-            gcms_preview.to_csv(gcms_path, index=False)
-            print(f"  GC-MS samples generated: {len(gcms_preview)}")
-            print(f"  GC-MS saved to: {gcms_path}")
+            gcms_df.to_csv(gcms_path, index=False)
+            print(f"  GC-MS samples generated: {len(gcms_df)}")
 
-        if "HPLC" not in selected_sources or "GCMS" not in selected_sources:
-            print(
-                "\n  [NOTICE] You did not select both HPLC and GC-MS."
-            )
-            print(
-                "  The full multi-task ML/DL path performs best with both HPLC+GCMS,"
-            )
-            print(
-                "  but the pipeline will continue: selected sources will be saved and the script will generate default HPLC/GCMS data for modelling if needed."
-            )
+        # For dummy mode, also generate fallback HPLC/GCMS if not in selected sources
+        # (for backward compatibility with ML/DL training)
+        if hplc_df is None:
+            hplc_df = generate_hplc(n_replicates=args.reps, random_seed=42)
+            print(f"  HPLC fallback generated: {len(hplc_df)} samples")
+        
+        if gcms_df is None:
+            gcms_df = generate_gcms(n_replicates=args.reps, random_seed=43)
+            print(f"  GC-MS fallback generated: {len(gcms_df)} samples")
+
+        print(f"\n[OK] Generated data for {len(generated_sources)} source(s)")
+
+    # For real data mode with multi-source, ensure we have at least HPLC or GCMS for compatibility
+    if data_mode == "real":
+        if hplc_df is None and gcms_df is None:
+            print("\n[WARNING] Neither HPLC nor GCMS data loaded. Generating fallback HPLC/GCMS for training compatibility.")
+            if hplc_df is None:
+                hplc_df = generate_hplc(n_replicates=5, random_seed=42)
+            if gcms_df is None:
+                gcms_df = generate_gcms(n_replicates=5, random_seed=43)
+
+    # Save real data sources to artifacts directory
+    if data_mode == "real":
+        if hplc_df is not None and "HPLC" in selected_sources:
+            hplc_path = source_artifacts_dir / "hplc_real_data.csv"
+            hplc_df.to_csv(hplc_path, index=False)
+        if gcms_df is not None and "GCMS" in selected_sources:
+            gcms_path = source_artifacts_dir / "gcms_real_data.csv"
+            gcms_df.to_csv(gcms_path, index=False)
+        if ftir_df is not None and "FTIR" in selected_sources:
+            ftir_path = source_artifacts_dir / "ftir_real_data.csv"
+            ftir_df.to_csv(ftir_path, index=False)
 
     # ------------------------------------------------------------------
-    # Step 1 & 2: Generate dummy data and export to Excel
+    # Step 1 & 2: Export to Excel (dummy data only)
     # ------------------------------------------------------------------
-    print("\n" + "="*60)
-    print("  Step 1 – Generate dummy HPLC & GC-MS fingerprint data")
-    print("="*60)
-
-    hplc_df = generate_hplc(n_replicates=args.reps, random_seed=42)
-    gcms_df = generate_gcms(n_replicates=args.reps, random_seed=43)
-    ftir_df = None  # Will be generated if FTIR is in selected_sources
-
-    print(f"  HPLC samples : {len(hplc_df)}")
-    print(f"  GC-MS samples: {len(gcms_df)}")
-    print(f"  HPLC columns : {len(hplc_df.columns)}")
-    print(f"  GC-MS columns: {len(gcms_df.columns)}")
-    print(f"  Assays       : {ASSAYS}")
-
-    if "FTIR" in selected_sources and "FTIR" not in generated_sources:
-        ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
-        generated_sources["FTIR"] = ftir_df
-        ftir_path = source_artifacts_dir / "ftir_data.csv"
-        ftir_df.to_csv(ftir_path, index=False)
-        print(f"  FTIR samples generated: {len(ftir_df)}")
-        print(f"  FTIR saved to: {ftir_path}")
-
-    print("\n" + "="*60)
-    print("  Step 2 – Export to Excel")
-    print("="*60)
-    export_to_excel(hplc_df, gcms_df, output_path=output_path)
+    if data_mode == "dummy":
+        print("\n" + "="*60)
+        print("  Step 1 – Export to Excel")
+        print("="*60)
+        export_to_excel(hplc_df, gcms_df, output_path=output_path)
 
     # ------------------------------------------------------------------
     # Step 3 & 4: Ingest and build feature matrix
@@ -675,13 +700,11 @@ def main() -> None:
     print("  Step 3 – Load, validate, engineer features")
     print("="*60)
 
-    # Build dataset from available/generated sources so any combination is supported
-    from HPLC_GCMS_Fingerprint.ingestion.dataset import MultiTaskDataset
-
+    # Build dataset from available sources (works with any combination)
     dataset = MultiTaskDataset.from_sources(
-        hplc_df=generated_sources.get("HPLC") if generated_sources.get("HPLC") is not None else hplc_df,
-        gcms_df=generated_sources.get("GCMS") if generated_sources.get("GCMS") is not None else gcms_df,
-        ftir_df=generated_sources.get("FTIR") if generated_sources.get("FTIR") is not None else None,
+        hplc_df=hplc_df,
+        gcms_df=gcms_df,
+        ftir_df=ftir_df,
         representation=args.representation,
     )
     print(f"  {dataset}")
@@ -695,11 +718,24 @@ def main() -> None:
     print("\n" + "="*60)
     print("  Step 4a – Fetch NCBI taxonomy for all species")
     print("="*60)
-    taxonomy_df = _fetch_taxonomy_table(
-        species_names=sorted(set(hplc_df["species"]).union(set(gcms_df["species"]))),
-        cache_path=output_path.parent / "taxonomy_cache.csv",
-        output_path=output_path.parent / "species_taxonomy.csv",
-    )
+    
+    # Get species names from available data sources
+    species_names = set()
+    if hplc_df is not None and "species" in hplc_df.columns:
+        species_names.update(hplc_df["species"].unique())
+    if gcms_df is not None and "species" in gcms_df.columns:
+        species_names.update(gcms_df["species"].unique())
+    if ftir_df is not None and "species" in ftir_df.columns:
+        species_names.update(ftir_df["species"].unique())
+    
+    if species_names:
+        taxonomy_df = _fetch_taxonomy_table(
+            species_names=sorted(species_names),
+            cache_path=output_path.parent / "taxonomy_cache.csv",
+            output_path=output_path.parent / "species_taxonomy.csv",
+        )
+    else:
+        taxonomy_df = pd.DataFrame()
     if not taxonomy_df.empty:
         print(f"  Taxonomy records saved: {len(taxonomy_df)}")
         print(f"  Unique species covered : {taxonomy_df['scientific_name'].nunique()}")

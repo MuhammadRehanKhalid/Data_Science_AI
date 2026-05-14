@@ -334,6 +334,12 @@ def plot_ftir_spectrum(
         fig.tight_layout()
         _save(fig, output_path)
         return
+
+    # Real FTIR files may not always include phylum metadata.
+    phylum_present = "phylum" in ftir_df.columns
+    if not phylum_present:
+        ftir_df = ftir_df.copy()
+        ftir_df["phylum"] = "Unknown"
     
     # Convert wavenumber column names to numeric values for x-axis
     try:
@@ -355,8 +361,12 @@ def plot_ftir_spectrum(
     
     phylum_of = dict(zip(ftir_df["species"], ftir_df["phylum"]))
     phylum_colors = {}
-    for i, ph in enumerate(sorted(set(ftir_df["phylum"]))):
-        phylum_colors[ph] = list(_PALETTE_PHYLA.values())[i % len(_PALETTE_PHYLA)]
+    phyla = sorted(set(ftir_df["phylum"]))
+    if phylum_present:
+        for i, ph in enumerate(phyla):
+            phylum_colors[ph] = list(_PALETTE_PHYLA.values())[i % len(_PALETTE_PHYLA)]
+    else:
+        phylum_colors["Unknown"] = "#333333"
     
     for ax, sp in zip(axes_flat, species_list):
         sub = ftir_df[ftir_df["species"] == sp].head(n_samples_per_species)
@@ -374,7 +384,7 @@ def plot_ftir_spectrum(
             ax.fill_between(wavenumbers, transmittance, alpha=0.08, color=color)
         
         ax.set_ylabel("Transmittance (%)", fontsize=9)
-        ax.set_title(f"{sp}  [{ph}]", fontsize=10, loc="left", pad=4)
+        ax.set_title(f"{sp}  [{ph}]" if phylum_present else sp, fontsize=10, loc="left", pad=4)
         ax.set_xlim(wavenumbers[0], wavenumbers[-1])
     
     for ax in axes_flat[n_sp:]:
