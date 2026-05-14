@@ -22,12 +22,14 @@ plot_solvent_heatmap            – mean activity × species/phylum per solvent
 plot_assay_boxplots             – per-phylum box-whisker for each assay
 plot_solvent_barplots           – grouped bars: mean activity per solvent × phylum
 plot_pca_biplot                 – PCA of fingerprint features coloured by phylum
+plot_plsda_biplot               – PLS-DA projection of fingerprint features
 plot_confusion_matrix           – classification results heatmap
 plot_training_curves            – DL training/val loss over epochs
 plot_feature_importance         – top-N RF feature importances
 plot_prediction_scatter         – true vs predicted regression values
 plot_radar_solvent              – radar chart of solvent scores per species
 plot_phylum_assay_recommendation– which assay to recommend per phylum (heatmap)
+plot_phylogenetic_tree          – taxonomy-based tree for all species
 """
 
 from __future__ import annotations
@@ -44,6 +46,9 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import pdist
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
@@ -145,6 +150,27 @@ def _save(fig: plt.Figure, path: Path) -> None:
     print(f"  [Figure] Saved → {path}")
 
 
+def _grid_layout(n_panels: int) -> tuple[int, int]:
+    """
+    Compute subplot grid dimensions.
+
+    Rules:
+      - For >4 panels: use a near-square layout.
+      - For 2-4 panels: force 2 columns.
+      - For 1 panel: single axis.
+    """
+    if n_panels <= 1:
+        return 1, 1
+    if n_panels <= 4:
+        cols = 2
+        rows = int(np.ceil(n_panels / cols))
+        return rows, cols
+
+    cols = int(np.ceil(np.sqrt(n_panels)))
+    rows = int(np.ceil(n_panels / cols))
+    return rows, cols
+
+
 # ---------------------------------------------------------------------------
 # 1. HPLC Chromatogram overlay
 # ---------------------------------------------------------------------------
@@ -163,20 +189,22 @@ def plot_hplc_chromatogram(
     species_list = sorted(hplc_df["species"].unique())
     intensity_cols = sorted([c for c in hplc_df.columns if c.startswith("intensity_RT_")])
 
+    n_sp = len(species_list)
+    n_rows, n_cols = _grid_layout(n_sp)
+
     fig, axes = plt.subplots(
-        len(species_list), 1,
-        figsize=(12, 2.5 * len(species_list)),
+        n_rows, n_cols,
+        figsize=(6.2 * n_cols, 2.9 * n_rows),
         sharex=True,
     )
-    if len(species_list) == 1:
-        axes = [axes]
+    axes_flat = np.array(axes).reshape(-1)
 
     phylum_of = dict(zip(hplc_df["species"], hplc_df["phylum"]))
     phylum_colors = {}
     for i, ph in enumerate(sorted(set(hplc_df["phylum"]))):
         phylum_colors[ph] = list(_PALETTE_PHYLA.values())[i % len(_PALETTE_PHYLA)]
 
-    for ax, sp in zip(axes, species_list):
+    for ax, sp in zip(axes_flat, species_list):
         sub = hplc_df[hplc_df["species"] == sp].head(n_samples_per_species)
         ph = phylum_of[sp]
         color = phylum_colors.get(ph, "#333333")
@@ -195,7 +223,26 @@ def plot_hplc_chromatogram(
         ax.set_title(f"{sp}  [{ph}]", fontsize=10, loc="left", pad=4)
         ax.set_xlim(rt_centers[0], rt_centers[-1])
 
-    axes[-1].set_xlabel("Retention Time (min)", fontsize=10)
+    for ax in axes_flat[n_sp:]:
+        ax.set_visible(False)
+
+    for ax in axes_flat:
+        if ax.get_visible():
+            ax.set_xlabel("Retention Time (min)", fontsize=10)
+
+    handles, labels = axes_flat[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            title="Replicate",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            fontsize=8,
+            title_fontsize=9,
+            borderaxespad=0.0,
+        )
+
     fig.suptitle("HPLC Chromatogram Profiles by Species", fontsize=13, y=1.01, fontweight="bold")
     fig.tight_layout()
     _save(fig, output_path)
@@ -209,7 +256,6 @@ def plot_gcms_spectrum(
     gcms_df: pd.DataFrame,
     mz_centers: np.ndarray,
     output_path: Path,
-    n_cols: int = 3,
 ) -> None:
     """
     Plot mean GC-MS m/z spectrum for each species as a bar chart panel.
@@ -219,7 +265,7 @@ def plot_gcms_spectrum(
     n_sp = len(species_list)
     mz_cols = sorted([c for c in gcms_df.columns if c.startswith("intensity_mz_")])
 
-    n_rows = (n_sp + n_cols - 1) // n_cols
+    n_rows, n_cols = _grid_layout(n_sp)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 3.2), sharey=False)
     axes_flat = np.array(axes).flatten() if n_sp > 1 else [axes]
 
@@ -413,8 +459,7 @@ def plot_assay_boxplots(
     palette = {ph: _PALETTE_PHYLA.get(ph, "#888888") for ph in phyla}
 
     n_assays = len(assays)
-    n_cols = min(3, n_assays)
-    n_rows = (n_assays + n_cols - 1) // n_cols
+    n_rows, n_cols = _grid_layout(n_assays)
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 4.5, n_rows * 4), sharey=False)
     axes_flat = np.array(axes).flatten() if n_assays > 1 else [axes]
@@ -470,11 +515,13 @@ def plot_solvent_barplots(
     phyla = sorted(df_long["phylum"].unique())
     sol_palette = [_PALETTE_SOLVENTS.get(s, "#888888") for s in solvents]
 
-    fig, axes = plt.subplots(1, len(phyla), figsize=(3.5 * len(phyla), 5), sharey=True)
-    if len(phyla) == 1:
-        axes = [axes]
+    n_panels = len(phyla)
+    n_rows, n_cols = _grid_layout(n_panels)
 
-    for ax, ph in zip(axes, phyla):
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.5 * n_cols, 4.0 * n_rows), sharey=True)
+    axes_flat = np.array(axes).reshape(-1)
+
+    for ax, ph in zip(axes_flat, phyla):
         sub = df_long[df_long["phylum"] == ph]
         means = sub.groupby("solvent")["activity"].mean().reindex(solvents)
         sems  = sub.groupby("solvent")["activity"].sem().reindex(solvents).fillna(0)
@@ -486,9 +533,12 @@ def plot_solvent_barplots(
         )
         ax.set_title(ph, fontsize=10, fontweight="bold")
         ax.set_xlabel("Solvent", fontsize=9)
-        ax.set_ylabel("Mean Activity (0–100)", fontsize=9) if ax == axes[0] else None
+        ax.set_ylabel("Mean Activity (0–100)", fontsize=9) if ax == axes_flat[0] else None
         ax.tick_params(axis="x", rotation=40, labelsize=8)
         ax.set_xticklabels(solvents, ha="right", fontsize=8)
+
+    for ax in axes_flat[n_panels:]:
+        ax.set_visible(False)
 
     fig.suptitle("Solvent Extraction Activity by Phylum", fontsize=13, fontweight="bold", y=1.02)
     fig.tight_layout()
@@ -529,7 +579,79 @@ def plot_pca_biplot(
     ax.set_xlabel(f"PC1 ({var1:.1f}% variance)", fontsize=10)
     ax.set_ylabel(f"PC2 ({var2:.1f}% variance)", fontsize=10)
     ax.set_title("PCA of Fingerprint Features — Coloured by Phylum", fontsize=12, fontweight="bold")
-    ax.legend(title="Phylum", fontsize=9, title_fontsize=9)
+    ax.legend(
+        title="Phylum",
+        fontsize=9,
+        title_fontsize=9,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+    )
+    ax.axhline(0, color="#AAAAAA", linewidth=0.5, linestyle="--")
+    ax.axvline(0, color="#AAAAAA", linewidth=0.5, linestyle="--")
+
+    fig.tight_layout()
+    _save(fig, output_path)
+
+
+# ---------------------------------------------------------------------------
+# 7b. PLS-DA projection coloured by phylum
+# ---------------------------------------------------------------------------
+
+def plot_plsda_biplot(
+    X_raw: np.ndarray,
+    phylum_labels: np.ndarray,
+    phylum_names: list[str],
+    output_path: Path,
+) -> None:
+    """
+    PLS-DA style supervised projection of the fingerprint feature matrix.
+
+    The phylum labels are one-hot encoded and the first two latent scores are
+    plotted to highlight class separation.
+    """
+    _apply_style()
+
+    X_scaled = StandardScaler().fit_transform(X_raw)
+    label_names = np.array([phylum_names[int(idx)] for idx in phylum_labels])
+    y_df = pd.get_dummies(label_names)
+    y_df = y_df.reindex(columns=phylum_names, fill_value=0)
+
+    n_components = 2 if min(X_scaled.shape[0], X_scaled.shape[1], len(phylum_names)) >= 2 else 1
+    pls = PLSRegression(n_components=n_components)
+    pls.fit(X_scaled, y_df.to_numpy(dtype=float))
+    scores = pls.x_scores_
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    palette_list = list(_PALETTE_PHYLA.values())
+
+    for i, ph in enumerate(phylum_names):
+        mask = label_names == ph
+        if not np.any(mask):
+            continue
+        color = _PALETTE_PHYLA.get(ph, palette_list[i % len(palette_list)])
+        ax.scatter(
+            scores[mask, 0],
+            scores[mask, 1] if scores.shape[1] > 1 else np.zeros(mask.sum()),
+            label=ph,
+            color=color,
+            alpha=0.78,
+            s=42,
+            edgecolors="white",
+            linewidths=0.4,
+        )
+
+    ax.set_xlabel("PLS1", fontsize=10)
+    ax.set_ylabel("PLS2" if scores.shape[1] > 1 else "PLS2 (not available)", fontsize=10)
+    ax.set_title("PLS-DA of Fingerprint Features — Coloured by Phylum", fontsize=12, fontweight="bold")
+    ax.legend(
+        title="Phylum",
+        fontsize=9,
+        title_fontsize=9,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+    )
     ax.axhline(0, color="#AAAAAA", linewidth=0.5, linestyle="--")
     ax.axvline(0, color="#AAAAAA", linewidth=0.5, linestyle="--")
 
@@ -599,7 +721,7 @@ def plot_training_curves(
     components = ["species", "phylum", "solvents", "assays"]
     comp_colors = {"species": "#E41A1C", "phylum": "#377EB8", "solvents": "#4DAF4A", "assays": "#FF7F00"}
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
 
     # Panel 1: total loss
     ax = axes[0]
@@ -608,7 +730,7 @@ def plot_training_curves(
     ax.set_xlabel("Epoch", fontsize=10)
     ax.set_ylabel("Loss", fontsize=10)
     ax.set_title("Total Training Loss", fontsize=11, fontweight="bold")
-    ax.legend()
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0)
 
     # Panel 2: component losses (training)
     ax = axes[1]
@@ -619,7 +741,7 @@ def plot_training_curves(
     ax.set_xlabel("Epoch", fontsize=10)
     ax.set_ylabel("Component Loss", fontsize=10)
     ax.set_title("Training Loss Components", fontsize=11, fontweight="bold")
-    ax.legend()
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0)
 
     fig.suptitle("DL Multi-Task Model – Training Curves", fontsize=13, fontweight="bold", y=1.01)
     fig.tight_layout()
@@ -671,8 +793,7 @@ def plot_prediction_scatter(
     """
     _apply_style()
     n_out = y_true.shape[1]
-    n_cols = min(3, n_out)
-    n_rows = (n_out + n_cols - 1) // n_cols
+    n_rows, n_cols = _grid_layout(n_out)
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 3.8, n_rows * 3.8))
     axes_flat = np.array(axes).flatten() if n_out > 1 else [axes]
@@ -746,7 +867,7 @@ def plot_radar_solvent(
     ax.set_yticklabels(["20", "40", "60", "80"], fontsize=7, color="#666")
     ax.set_rlabel_position(30)
     ax.set_title("Solvent Performance per Species (Radar Chart)", fontsize=12, fontweight="bold", pad=20)
-    ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=8)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=8, borderaxespad=0.0)
 
     fig.tight_layout()
     _save(fig, output_path)
@@ -889,8 +1010,120 @@ def plot_best_solvent_distribution(
     ax.set_ylabel("Frequency (%)", fontsize=10)
     ax.set_xlabel("Phylum", fontsize=10)
     ax.set_title("Distribution of Best Solvent per Phylum", fontsize=12, fontweight="bold")
-    ax.legend(title="Solvent", bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=9)
+    ax.legend(title="Solvent", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=9, borderaxespad=0.0)
     ax.tick_params(axis="x", rotation=30)
 
     fig.tight_layout()
+    _save(fig, output_path)
+
+
+# ---------------------------------------------------------------------------
+# 16. Taxonomy-based phylogenetic tree
+# ---------------------------------------------------------------------------
+
+def plot_phylogenetic_tree(
+    taxonomy_df: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """
+    Build a lineage-based phylogenetic tree for all species with taxonomy data.
+
+    The tree is derived from the shared NCBI lineage ranks available in the
+    taxonomy dataframe. Leaf labels are coloured by phylum (origin level).
+    """
+    _apply_style()
+
+    if taxonomy_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No taxonomy data available", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        _save(fig, output_path)
+        return
+
+    required_cols = ["species_input", "scientific_name", "phylum", "origin", "kingdom", "class", "order", "family", "genus"]
+    df = taxonomy_df.copy()
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = "Unknown"
+
+    if "status" in df.columns:
+        df = df[df["status"].fillna("").isin(["SUCCESS", ""])]
+
+    label_column = "species_label" if "species_label" in df.columns else "species_input"
+    df = df.drop_duplicates(subset=[label_column])
+    if len(df) < 2:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "Not enough taxonomy records for a tree", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        _save(fig, output_path)
+        return
+
+    lineage_cols = ["kingdom", "phylum", "class", "order", "family", "genus"]
+    lineage_frame = df[lineage_cols].fillna("Unknown").astype(str)
+    encoded = pd.get_dummies(lineage_frame, prefix=lineage_cols, prefix_sep="=")
+
+    if encoded.shape[0] < 2:
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "Not enough unique lineage profiles for clustering", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        _save(fig, output_path)
+        return
+
+    distances = pdist(encoded.to_numpy(dtype=float), metric="euclidean")
+    linkage_matrix = linkage(distances, method="average")
+
+    fig_height = max(5.5, 0.35 * len(df))
+    # Increase width to accommodate left dendrogram + wide species labels + legend on right
+    fig_width = max(14, 0.8 + 0.15 * len(df))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    labels = df[label_column].fillna(df["scientific_name"]).tolist()
+
+    dendrogram(
+        linkage_matrix,
+        labels=labels,
+        orientation="left",
+        leaf_font_size=9,
+        color_threshold=None,
+        above_threshold_color="#4B4B4B",
+        ax=ax,
+    )
+
+    color_column = "origin" if "origin" in df.columns else "phylum"
+    phylum_lookup = df.set_index(label_column)[color_column].to_dict()
+    for label in ax.get_yticklabels():
+        species = label.get_text()
+        phylum = phylum_lookup.get(species, "Unknown")
+        label.set_color(_PALETTE_PHYLA.get(phylum, "#444444"))
+        label.set_fontweight("bold")
+
+    ax.set_title("Phylogenetic Tree of Species (colored by phylum)", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Taxonomic distance", fontsize=10)
+    ax.set_ylabel("Species", fontsize=10)
+
+    legend_handles = []
+    seen = set()
+    for phylum in df[color_column].fillna("Unknown").tolist():
+        if phylum in seen:
+            continue
+        seen.add(phylum)
+        legend_handles.append(
+            mpatches.Patch(color=_PALETTE_PHYLA.get(phylum, "#666666"), label=phylum)
+        )
+
+    if legend_handles:
+        ax.legend(
+            handles=legend_handles,
+            title="Phylum / origin",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            fontsize=8,
+            title_fontsize=9,
+            borderaxespad=0.0,
+        )
+
+    # Add margins to prevent label clipping
+    fig.subplots_adjust(left=0.05, right=0.85, top=0.95, bottom=0.08)
     _save(fig, output_path)

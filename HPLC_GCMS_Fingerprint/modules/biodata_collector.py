@@ -121,7 +121,7 @@ class BiodataCollector:
             "notes": input("Additional notes: ").strip()
         }
         
-        print("\n✓ Experiment metadata recorded")
+        print("\n[OK] Experiment metadata recorded")
     
     def collect_growth_conditions(self):
         """Collect growth condition parameters."""
@@ -142,7 +142,7 @@ class BiodataCollector:
             "cultivation_type": input("Cultivation type (batch/fed-batch/continuous): ").strip()
         }
         
-        print("\n✓ Growth conditions recorded")
+        print("\n[OK] Growth conditions recorded")
     
     def collect_medium_and_nutrients(self):
         """Collect medium and nutrient information."""
@@ -160,7 +160,7 @@ class BiodataCollector:
             "mineral_enrichment": input("Trace elements or minerals: ").strip()
         }
         
-        print("\n✓ Medium and nutrients recorded")
+        print("\n[OK] Medium and nutrients recorded")
     
     def collect_environmental_conditions(self):
         """Collect environmental parameters."""
@@ -177,7 +177,7 @@ class BiodataCollector:
             "sterility_method": input("Sterility maintenance method: ").strip()
         }
         
-        print("\n✓ Environmental conditions recorded")
+        print("\n[OK] Environmental conditions recorded")
     
     def collect_sample_data(self) -> Dict:
         """
@@ -210,7 +210,7 @@ class BiodataCollector:
         """Add a sample to the collection."""
         sample = self.collect_sample_data()
         self.biodata["samples"].append(sample)
-        print(f"\n✓ Sample '{sample['sample_id']}' added")
+        print(f"\n[OK] Sample '{sample['sample_id']}' added")
     
     def add_multiple_samples(self, n_samples: int):
         """
@@ -248,7 +248,7 @@ class BiodataCollector:
             output_path = self.output_dir / f"biodata_{exp_id}_{timestamp}.json"
             with open(output_path, "w") as f:
                 json.dump(self.biodata, f, indent=2)
-            logger.info(f"✓ Biodata saved to {output_path}")
+            logger.info(f"[OK] Biodata saved to {output_path}")
             
         elif format == "csv":
             # Save experiment metadata
@@ -261,7 +261,7 @@ class BiodataCollector:
             samples_path = self.output_dir / f"biodata_samples_{exp_id}_{timestamp}.csv"
             samples_df.to_csv(samples_path, index=False)
             
-            logger.info(f"✓ Biodata saved to {meta_path} and {samples_path}")
+            logger.info(f"[OK] Biodata saved to {meta_path} and {samples_path}")
             output_path = meta_path
         
         return output_path
@@ -309,7 +309,7 @@ class BiodataCollector:
             try:
                 return float(user_input)
             except ValueError:
-                print("✗ Please enter a valid number")
+                print("[ERROR] Please enter a valid number")
 
 
 # ============================================================
@@ -336,7 +336,7 @@ class BiodataManager:
         """
         with open(file_path, "r") as f:
             biodata = json.load(f)
-        logger.info(f"✓ Loaded biodata from {file_path}")
+        logger.info(f"[OK] Loaded biodata from {file_path}")
         return biodata
     
     @staticmethod
@@ -362,7 +362,7 @@ class BiodataManager:
         samples_df = pd.DataFrame(biodata["samples"])
         merged = predictions_df.merge(samples_df, on="sample_id", how="left")
         
-        logger.info(f"✓ Merged biodata with predictions: {merged.shape}")
+        logger.info(f"[OK] Merged biodata with predictions: {merged.shape}")
         return merged
 
 
@@ -393,7 +393,7 @@ if __name__ == "__main__":
                 break
         except ValueError:
             pass
-        print("✗ Please enter a positive integer")
+        print("[ERROR] Please enter a positive integer")
     
     collector.add_multiple_samples(n_samples)
     

@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
@@ -59,6 +60,7 @@ from HPLC_GCMS_Fingerprint.data_generation.constants import (
     ASSAYS,
     HPLC_RT_CENTERS,
     MZ_BIN_CENTERS,
+    PHYLA,
     SOLVENTS,
 )
 from HPLC_GCMS_Fingerprint.ingestion import MultiTaskDataset
@@ -70,6 +72,9 @@ from HPLC_GCMS_Fingerprint.evaluation import (
     recommend,
 )
 from HPLC_GCMS_Fingerprint.models import recommend_model
+from HPLC_GCMS_Fingerprint.modules.taxonomy_fetcher import NCBITaxonomyFetcher
+from HPLC_GCMS_Fingerprint.modules.sample_data_generator import SampleDataGenerator
+from HPLC_GCMS_Fingerprint.modules.biodata_collector import BiodataCollector
 from HPLC_GCMS_Fingerprint.visualization import (
     plot_assay_boxplots,
     plot_assay_heatmap,
@@ -80,7 +85,9 @@ from HPLC_GCMS_Fingerprint.visualization import (
     plot_hplc_chromatogram,
     plot_phylum_assay_recommendation,
     plot_pca_biplot,
+    plot_phylogenetic_tree,
     plot_prediction_scatter,
+    plot_plsda_biplot,
     plot_radar_solvent,
     plot_solvent_assay_interaction,
     plot_solvent_barplots,
@@ -97,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="HPLC/GC-MS Multi-Task Pipeline")
     p.add_argument(
         "--reps", type=int, default=15,
-        help="Replicates per species (default: 15 → 90 total samples)",
+        help="Replicates per species (default: 15 -> 90 total samples)",
     )
     p.add_argument(
         "--output", type=str, default="HPLC_GCMS_Fingerprint/data/fingerprint_data.xlsx",
@@ -182,6 +189,74 @@ def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
     figures_dir = Path(args.figures_dir)
+    
+    # ------------------------------------------------------------------
+    # Step 0: Data Mode Selection (DUMMY or REAL)
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 0 – Data Mode Selection")
+    print("="*60)
+    
+    data_gen = SampleDataGenerator()
+    data_mode = data_gen.ask_data_mode()
+    
+    # For now, we'll use dummy mode (real mode would require user file input)
+    # The interactive choice has been presented
+    if data_mode == "real":
+        print("\n[NOTE: Real data mode selected, but pipeline currently uses auto-generated dummy data]")
+        print("[      To use real data, please modify the pipeline or provide CSV/Excel files]")
+        data_mode = "dummy"
+    
+    print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
+    
+    # ------------------------------------------------------------------
+    # Step 0.5: Optional Biodata Collection
+    # ------------------------------------------------------------------
+    biodata_collector = None
+    biodata = None
+    add_biodata = input("\n" + "="*60 + 
+                       "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
+    
+    if add_biodata in ["y", "yes"]:
+        print("\n" + "="*60)
+        print("  Step 0.5 – Biodata & Growth Conditions Collection")
+        print("="*60)
+        
+        biodata_collector = BiodataCollector(
+            output_dir=output_path.parent / "biodata"
+        )
+        biodata_collector.print_welcome()
+        
+        # Collect experiment metadata
+        collect_exp = input("\nCollect experiment metadata? (y/n, default: y): ").strip().lower()
+        if collect_exp != "n":
+            biodata_collector.collect_experiment_metadata()
+        
+        # Collect growth conditions
+        collect_growth = input("\nCollect growth conditions? (y/n, default: y): ").strip().lower()
+        if collect_growth != "n":
+            biodata_collector.collect_growth_conditions()
+        
+        # Collect medium/nutrients
+        collect_medium = input("\nCollect medium and nutrient information? (y/n, default: y): ").strip().lower()
+        if collect_medium != "n":
+            biodata_collector.collect_medium_and_nutrients()
+        
+        # Collect environmental conditions
+        collect_env = input("\nCollect environmental conditions? (y/n, default: y): ").strip().lower()
+        if collect_env != "n":
+            biodata_collector.collect_environmental_conditions()
+        
+        # Save biodata
+        save_biodata = input("\nSave biodata to file? (y/n, default: y): ").strip().lower()
+        if save_biodata != "n":
+            biodata_collector.save_biodata(format="json")
+            print(f"[OK] Biodata saved to: {biodata_collector.output_dir}")
+        
+        biodata = biodata_collector.biodata
+        print("\n[OK] Biodata collection complete")
+    else:
+        print("\n[Skipping biodata collection]")
 
     # ------------------------------------------------------------------
     # Step 1 & 2: Generate dummy data and export to Excel
@@ -219,6 +294,23 @@ def main() -> None:
 
     train_ds, test_ds = dataset.train_test_split(test_size=0.2, random_state=42)
     print(f"  Train: {len(train_ds)} samples  |  Test: {len(test_ds)} samples")
+
+    # ------------------------------------------------------------------
+    # Step 4a: Fetch taxonomy for the species present in the dataset
+    # ------------------------------------------------------------------
+    print("\n" + "="*60)
+    print("  Step 4a – Fetch NCBI taxonomy for all species")
+    print("="*60)
+    taxonomy_df = _fetch_taxonomy_table(
+        species_names=sorted(set(hplc_df["species"]).union(set(gcms_df["species"]))),
+        cache_path=output_path.parent / "taxonomy_cache.csv",
+        output_path=output_path.parent / "species_taxonomy.csv",
+    )
+    if not taxonomy_df.empty:
+        print(f"  Taxonomy records saved: {len(taxonomy_df)}")
+        print(f"  Unique species covered : {taxonomy_df['scientific_name'].nunique()}")
+    else:
+        print("  [No taxonomy records available]")
 
     # ------------------------------------------------------------------
     # Step 4b: Model recommendation (optional)
@@ -282,7 +374,7 @@ def main() -> None:
 
     x_new = test_ds.X[0]
 
-    print("\n  → ML Baseline recommendation:")
+    print("\n  -> ML Baseline recommendation:")
     rec_ml = recommend(
         ml_model, x_new,
         solvent_names=dataset.solvent_names,
@@ -294,7 +386,7 @@ def main() -> None:
     _print_recommendation(rec_ml)
 
     if dl_model is not None:
-        print("\n  → DL Model recommendation:")
+        print("\n  -> DL Model recommendation:")
         rec_dl = recommend(
             dl_model, x_new,
             solvent_names=dataset.solvent_names,
@@ -308,7 +400,7 @@ def main() -> None:
     true_species  = dataset.species_names[test_ds.species[0]]
     true_solvent  = test_ds.best_solvent[0]
     true_assay    = test_ds.best_assay[0]
-    print(f"\n  Ground truth → species: {true_species} | "
+    print(f"\n  Ground truth -> species: {true_species} | "
           f"best_solvent: {true_solvent} | best_assay: {true_assay}")
 
     # ------------------------------------------------------------------
@@ -322,6 +414,7 @@ def main() -> None:
             hplc_df=hplc_df,
             gcms_df=gcms_df,
             dataset=dataset,
+            taxonomy_df=taxonomy_df,
             train_ds=train_ds,
             test_ds=test_ds,
             ml_model=ml_model,
@@ -345,6 +438,7 @@ def _generate_figures(
     hplc_df,
     gcms_df,
     dataset,
+    taxonomy_df,
     train_ds,
     test_ds,
     ml_model,
@@ -400,6 +494,14 @@ def _generate_figures(
         phylum_labels=dataset.phylum,
         phylum_names=dataset.phylum_names,
         output_path=figures_dir / f"07_pca_biplot{ext}",
+    )
+
+    # 7b. PLS-DA biplot
+    plot_plsda_biplot(
+        X_raw=dataset.X,
+        phylum_labels=dataset.phylum,
+        phylum_names=dataset.phylum_names,
+        output_path=figures_dir / f"07b_plsda_biplot{ext}",
     )
 
     # 8. Confusion matrices – ML model
@@ -522,6 +624,29 @@ def _generate_figures(
         hplc_df, SOLVENTS,
         output_path=figures_dir / f"15_best_solvent_distribution{ext}",
     )
+
+    # 16. Taxonomy-based phylogenetic tree
+    plot_phylogenetic_tree(
+        taxonomy_df=taxonomy_df,
+        output_path=figures_dir / f"16_phylogenetic_tree{ext}",
+    )
+
+
+def _fetch_taxonomy_table(
+    *,
+    species_names: list[str],
+    cache_path: Path,
+    output_path: Path,
+) -> pd.DataFrame:
+    """Fetch and persist taxonomy rows for the species present in this run."""
+    fetcher = NCBITaxonomyFetcher(cache_file=cache_path)
+    taxonomy_df = fetcher.fetch_batch_taxonomy(species_names)
+    if not taxonomy_df.empty:
+        taxonomy_df["origin"] = taxonomy_df["species_input"].map(PHYLA).fillna(taxonomy_df.get("phylum", "Unknown"))
+        taxonomy_df["species_label"] = taxonomy_df["species_input"]
+    taxonomy_df.to_csv(output_path, index=False)
+    fetcher.save_cache()
+    return taxonomy_df
 
 
 def _print_recommendation(rec: dict) -> None:

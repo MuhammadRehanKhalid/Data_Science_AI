@@ -29,9 +29,17 @@ def classification_metrics(
     """Return accuracy and macro-F1 for a classification head."""
     acc = accuracy_score(y_true, y_pred)
     f1  = f1_score(y_true, y_pred, average="macro", zero_division=0)
+
+    labels = np.unique(np.concatenate([np.asarray(y_true), np.asarray(y_pred)]))
+    if target_names is not None:
+        report_target_names = [target_names[int(label)] for label in labels]
+    else:
+        report_target_names = None
+
     report = classification_report(
         y_true, y_pred,
-        target_names=target_names,
+        labels=labels,
+        target_names=report_target_names,
         zero_division=0,
     )
     return {"accuracy": acc, "f1_macro": f1, "report": report}

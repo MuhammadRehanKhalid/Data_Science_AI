@@ -77,6 +77,12 @@ class NCBITaxonomyFetcher:
             search_handle.close()
             
             if len(search_record["IdList"]) == 0:
+                # Fallback: Try base name without suffixes (e.g., remove "(green)", "(orange)")
+                base_name = species_name.split("(")[0].strip()
+                if base_name != species_name:
+                    logger.info(f"→ Fallback: Trying base name '{base_name}' after suffix removal")
+                    return self.fetch_taxonomy(base_name, use_cache=use_cache)
+                
                 result = {
                     "species_input": species_name,
                     "status": "NOT_FOUND",

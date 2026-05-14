@@ -111,12 +111,12 @@ class SampleDataGenerator:
             file_path = Path(input().strip())
             
             if not file_path.exists():
-                print(f"✗ File not found: {file_path}")
+                print(f"[ERROR] File not found: {file_path}")
                 print("Please enter a valid file path: ", end="")
                 continue
             
             if file_path.suffix.lower() not in [".csv", ".xlsx", ".xls"]:
-                print(f"✗ Unsupported format: {file_path.suffix}")
+                print(f"[ERROR] Unsupported format: {file_path.suffix}")
                 print("Please provide a CSV or Excel file: ", end="")
                 continue
             
