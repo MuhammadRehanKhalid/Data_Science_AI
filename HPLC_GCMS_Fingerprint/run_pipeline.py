@@ -41,7 +41,7 @@ from datetime import datetime
 import pandas as pd
 from typing import Any
 
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import GridSearchCV, KFold, ParameterGrid, RandomizedSearchCV, StratifiedKFold
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path when running as a script
@@ -76,8 +76,13 @@ from HPLC_GCMS_Fingerprint.evaluation import (
     print_results,
     recommend,
 )
-from HPLC_GCMS_Fingerprint.models import recommend_model
+from HPLC_GCMS_Fingerprint.models import (
+    MLMultiTaskSearchEstimator,
+    pack_multitask_targets,
+    recommend_model,
+)
 from HPLC_GCMS_Fingerprint.modules.taxonomy_fetcher import NCBITaxonomyFetcher
+from HPLC_GCMS_Fingerprint.modules.data_input_validator import DataSourceSelector
 from HPLC_GCMS_Fingerprint.modules.sample_data_generator import SampleDataGenerator
 from HPLC_GCMS_Fingerprint.modules.biodata_collector import BiodataCollector
 from HPLC_GCMS_Fingerprint.visualization import (
@@ -204,6 +209,13 @@ def parse_args() -> argparse.Namespace:
             "more publication-grade estimate of performance."
         ),
     )
+    p.add_argument(
+        "--publication-mode", action="store_true",
+        help=(
+            "Enable publication-style behavior: nested CV on, optimization on, "
+            "and full run metadata exports for reproducibility."
+        ),
+    )
     return p.parse_args()
 
 
@@ -215,6 +227,11 @@ def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
     figures_dir = Path(args.figures_dir)
+
+    if args.publication_mode:
+        args.nested_cv = True
+        args.skip_optimization = False
+        print("\n[Publication mode enabled] Nested CV and optimization are on; artifacts will be exported for reporting.")
     
     # ------------------------------------------------------------------
     # Pre-flight Check: Validate Species Names (if requested)
@@ -250,12 +267,18 @@ def main() -> None:
     
     data_gen = SampleDataGenerator()
     data_mode = data_gen.ask_data_mode()
+
+    source_selector = DataSourceSelector()
+    source_selector.print_welcome()
+    selected_sources = source_selector.ask_source_selection()
+    print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
     
     # For now, we'll use dummy mode (real mode would require user file input)
     # The interactive choice has been presented
     if data_mode == "real":
-        print("\n[NOTE: Real data mode selected, but pipeline currently uses auto-generated dummy data]")
-        print("[      To use real data, please modify the pipeline or provide CSV/Excel files]")
+        print("\n[NOTE] Real data mode is still wired for the HPLC/GC-MS workbook flow in this pipeline.")
+        print("[      The new source-selection prompt is available here, but real multi-file loading is not yet fully connected in this script.")
+        print("[      If you need that now, the enhanced multi-source loader still exists, but I can also wire it here next.")
         data_mode = "dummy"
     
     print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
@@ -309,6 +332,52 @@ def main() -> None:
     else:
         print("\n[Skipping biodata collection]")
 
+    # Keep track of optional source-specific artifacts.
+    source_artifacts_dir = output_path.parent / "source_inputs"
+    source_artifacts_dir.mkdir(parents=True, exist_ok=True)
+    generated_sources: dict[str, pd.DataFrame] = {}
+
+    if data_mode == "dummy":
+        print("\n" + "="*60)
+        print("  Step 0.6 – Generate Selected Source Inputs")
+        print("="*60)
+
+        if "FTIR" in selected_sources:
+            ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
+            generated_sources["FTIR"] = ftir_df
+            ftir_path = source_artifacts_dir / "ftir_data.csv"
+            ftir_df.to_csv(ftir_path, index=False)
+            print(f"  FTIR samples generated: {len(ftir_df)}")
+            print(f"  FTIR saved to: {ftir_path}")
+
+        if "HPLC" in selected_sources:
+            hplc_preview = generate_hplc(n_replicates=args.reps, random_seed=42)
+            generated_sources["HPLC"] = hplc_preview
+            hplc_path = source_artifacts_dir / "hplc_data.csv"
+            hplc_preview.to_csv(hplc_path, index=False)
+            print(f"  HPLC samples generated: {len(hplc_preview)}")
+            print(f"  HPLC saved to: {hplc_path}")
+
+        if "GCMS" in selected_sources:
+            gcms_preview = generate_gcms(n_replicates=args.reps, random_seed=43)
+            generated_sources["GCMS"] = gcms_preview
+            gcms_path = source_artifacts_dir / "gcms_data.csv"
+            gcms_preview.to_csv(gcms_path, index=False)
+            print(f"  GC-MS samples generated: {len(gcms_preview)}")
+            print(f"  GC-MS saved to: {gcms_path}")
+
+        if "HPLC" not in selected_sources or "GCMS" not in selected_sources:
+            print(
+                "\n  [IMPORTANT] The current ML/DL multi-task model in this script requires BOTH HPLC and GC-MS inputs."
+            )
+            print(
+                "  You selected a source set that does not include both, so the script will stop after generating/saving the chosen sources."
+            )
+            print(
+                "  To run the model training/evaluation path, re-run and choose HPLC + GCMS (FTIR can also be added as an extra source artifact)."
+            )
+            return
+
     # ------------------------------------------------------------------
     # Step 1 & 2: Generate dummy data and export to Excel
     # ------------------------------------------------------------------
@@ -324,6 +393,14 @@ def main() -> None:
     print(f"  HPLC columns : {len(hplc_df.columns)}")
     print(f"  GC-MS columns: {len(gcms_df.columns)}")
     print(f"  Assays       : {ASSAYS}")
+
+    if "FTIR" in selected_sources and "FTIR" not in generated_sources:
+        ftir_df = data_gen.generate_ftir_data(n_samples=args.reps * len(data_gen.algae_species))
+        generated_sources["FTIR"] = ftir_df
+        ftir_path = source_artifacts_dir / "ftir_data.csv"
+        ftir_df.to_csv(ftir_path, index=False)
+        print(f"  FTIR samples generated: {len(ftir_df)}")
+        print(f"  FTIR saved to: {ftir_path}")
 
     print("\n" + "="*60)
     print("  Step 2 – Export to Excel")
@@ -381,6 +458,8 @@ def main() -> None:
     selected_ml_reg = args.ml_reg
     selected_n_estimators_clf = 300
     selected_n_estimators_reg = 200
+    ml_tuning_mode = "manual"
+    ml_search_results: dict[str, Any] | None = None
     selected_dl_params = {
         "epochs": args.epochs,
         "batch_size": args.batch_size,
@@ -396,19 +475,47 @@ def main() -> None:
 
         opt_train_ds, opt_val_ds = train_ds.train_test_split(test_size=0.25, random_state=42)
 
-        print("  [ML] Searching best classifier/regressor combination...")
-        ml_opt = _optimize_ml_configs(opt_train_ds, opt_val_ds)
-        selected_ml_clf = ml_opt["best"]["clf_type"]
-        selected_ml_reg = ml_opt["best"]["reg_type"]
-        selected_n_estimators_clf = ml_opt["best"]["n_estimators_clf"]
-        selected_n_estimators_reg = ml_opt["best"]["n_estimators_reg"]
-        print(
-            "  [ML] Best params -> "
-            f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
-            f"n_estimators_clf={selected_n_estimators_clf}, "
-            f"n_estimators_reg={selected_n_estimators_reg}, "
-            f"score={ml_opt['best']['score']:.4f}"
-        )
+        use_sklearn_search = input(
+            "  Switch ML tuning to scikit-learn GridSearchCV/RandomizedSearchCV? (y/n, default: n): "
+        ).strip().lower()
+        if use_sklearn_search in {"y", "yes"}:
+            search_kind = input(
+                "  Choose search type [grid/randomized] (default: randomized): "
+            ).strip().lower() or "randomized"
+            ml_tuning_mode = "grid" if search_kind.startswith("g") else "randomized"
+            print(f"  [ML] Using sklearn {ml_tuning_mode.title()}SearchCV...")
+
+            ml_search = _run_ml_sklearn_search(
+                opt_train_ds,
+                search_mode=ml_tuning_mode,
+                random_state=42,
+            )
+            ml_search_results = ml_search
+            selected_ml_clf = ml_search["best_params"]["clf_type"]
+            selected_ml_reg = ml_search["best_params"]["reg_type"]
+            selected_n_estimators_clf = ml_search["best_params"]["n_estimators_clf"]
+            selected_n_estimators_reg = ml_search["best_params"]["n_estimators_reg"]
+            print(
+                "  [ML] Best params -> "
+                f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+                f"n_estimators_clf={selected_n_estimators_clf}, "
+                f"n_estimators_reg={selected_n_estimators_reg}, "
+                f"score={ml_search['best_score']:.4f}"
+            )
+        else:
+            print("  [ML] Using current manual tuning settings...")
+            ml_opt = _optimize_ml_configs(opt_train_ds, opt_val_ds)
+            selected_ml_clf = ml_opt["best"]["clf_type"]
+            selected_ml_reg = ml_opt["best"]["reg_type"]
+            selected_n_estimators_clf = ml_opt["best"]["n_estimators_clf"]
+            selected_n_estimators_reg = ml_opt["best"]["n_estimators_reg"]
+            print(
+                "  [ML] Best params -> "
+                f"clf={selected_ml_clf}, reg={selected_ml_reg}, "
+                f"n_estimators_clf={selected_n_estimators_clf}, "
+                f"n_estimators_reg={selected_n_estimators_reg}, "
+                f"score={ml_opt['best']['score']:.4f}"
+            )
 
         if not args.skip_dl:
             print("  [DL] Searching best training parameters...")
@@ -429,7 +536,12 @@ def main() -> None:
         print("\n" + "="*60)
         print("  Step 4d – Nested Cross-Validation")
         print("="*60)
-        nested_cv_summary["ml"] = _run_nested_cv_ml(train_ds, random_state=42, outer_splits=3)
+        nested_cv_summary["ml"] = _run_nested_cv_ml(
+            train_ds,
+            random_state=42,
+            outer_splits=3,
+            tuning_mode=ml_tuning_mode,
+        )
         print(
             "  [NESTED CV][ML] mean score = "
             f"{nested_cv_summary['ml']['mean_score']:.4f} ± {nested_cv_summary['ml']['std_score']:.4f}"
@@ -532,6 +644,7 @@ def main() -> None:
         output_root=output_path.parent,
         args=args,
         dataset=dataset,
+        selected_sources=selected_sources,
         selected_ml={
             "clf": selected_ml_clf,
             "reg": selected_ml_reg,
@@ -544,6 +657,8 @@ def main() -> None:
         best_model_name=best_model_name,
         dl_history=dl_history,
         nested_cv_summary=nested_cv_summary,
+        ml_tuning_mode=ml_tuning_mode,
+        ml_search_results=ml_search_results,
     )
     print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
 
@@ -984,10 +1099,68 @@ def _optimize_dl_configs(
     return {"best": dl_trials[0], "trials": dl_trials}
 
 
+def _run_ml_sklearn_search(
+    train_ds: MultiTaskDataset,
+    search_mode: str = "randomized",
+    random_state: int = 42,
+    n_iter: int = 18,
+) -> dict[str, Any]:
+    """Run GridSearchCV or RandomizedSearchCV over the ML baseline parameters."""
+    param_space = {
+        "clf_type": ["random_forest", "gradient_boosting", "svm", "logistic_regression"],
+        "reg_type": ["gradient_boosting", "random_forest", "ridge", "lasso"],
+        "n_estimators_clf": [150, 300, 500],
+        "n_estimators_reg": [100, 200, 400],
+    }
+
+    X = train_ds.X
+    y = pack_multitask_targets(
+        train_ds.species,
+        train_ds.phylum,
+        train_ds.y_solvents,
+        train_ds.y_assays,
+    )
+    cv = KFold(n_splits=max(2, min(3, len(train_ds))), shuffle=True, random_state=random_state)
+    estimator = MLMultiTaskSearchEstimator(random_state=random_state)
+
+    if search_mode == "grid":
+        search = GridSearchCV(
+            estimator=estimator,
+            param_grid=param_space,
+            scoring=None,
+            cv=cv,
+            n_jobs=-1,
+            refit=True,
+        )
+    else:
+        total_combinations = len(ParameterGrid(param_space))
+        search = RandomizedSearchCV(
+            estimator=estimator,
+            param_distributions=param_space,
+            n_iter=min(n_iter, total_combinations),
+            scoring=None,
+            cv=cv,
+            random_state=random_state,
+            n_jobs=-1,
+            refit=True,
+        )
+
+    search.fit(X, y)
+
+    return {
+        "search_mode": search_mode,
+        "best_params": search.best_params_,
+        "best_score": float(search.best_score_),
+        "search_object": search,
+        "cv_results": pd.DataFrame(search.cv_results_),
+    }
+
+
 def _run_nested_cv_ml(
     dataset: MultiTaskDataset,
     random_state: int = 42,
     outer_splits: int = 3,
+    tuning_mode: str = "manual",
 ) -> dict[str, Any]:
     """Nested CV for the ML baseline: inner tuning, outer unbiased scoring."""
     outer_cv = StratifiedKFold(n_splits=outer_splits, shuffle=True, random_state=random_state)
@@ -999,8 +1172,16 @@ def _run_nested_cv_ml(
         outer_val = dataset._subset(va_idx)
         inner_train, inner_val = outer_train.train_test_split(test_size=0.25, random_state=random_state + fold_idx)
 
-        tuned = _optimize_ml_configs(inner_train, inner_val)
-        best = tuned["best"]
+        if tuning_mode in {"grid", "randomized"}:
+            tuned = _run_ml_sklearn_search(
+                inner_train,
+                search_mode=tuning_mode,
+                random_state=random_state + fold_idx,
+            )
+            best = tuned["best_params"]
+        else:
+            tuned = _optimize_ml_configs(inner_train, inner_val)
+            best = tuned["best"]
         fold_params.append(best)
 
         model = train_ml(
@@ -1094,6 +1275,7 @@ def _save_run_artifacts(
     output_root: Path,
     args: argparse.Namespace,
     dataset,
+    selected_sources: list[str],
     selected_ml: dict[str, Any],
     selected_dl: dict[str, Any] | None,
     ml_results: dict[str, Any],
@@ -1101,6 +1283,8 @@ def _save_run_artifacts(
     best_model_name: str,
     dl_history: list[dict[str, Any]],
     nested_cv_summary: dict[str, Any] | None = None,
+    ml_tuning_mode: str = "manual",
+    ml_search_results: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Persist run parameters and outcomes for reproducibility and publications."""
     results_dir = output_root / "results"
@@ -1111,6 +1295,10 @@ def _save_run_artifacts(
     ml_metrics_path = results_dir / f"metrics_ml_{ts}.csv"
     dl_metrics_path = results_dir / f"metrics_dl_{ts}.csv"
     dl_history_path = results_dir / f"dl_history_{ts}.csv"
+    nested_cv_ml_path = results_dir / f"nested_cv_ml_folds_{ts}.csv"
+    nested_cv_dl_path = results_dir / f"nested_cv_dl_folds_{ts}.csv"
+    nested_cv_params_path = results_dir / f"nested_cv_best_params_{ts}.csv"
+    ml_search_cv_results_path = results_dir / f"ml_search_cv_results_{ts}.csv"
 
     score_board = {
         "ML": _aggregate_model_score(ml_results),
@@ -1129,11 +1317,13 @@ def _save_run_artifacts(
             "n_solvents": int(len(dataset.solvent_names)),
             "n_assays": int(len(dataset.assay_names)),
         },
+        "selected_sources": selected_sources,
         "selected_ml": selected_ml,
         "selected_dl": selected_dl,
         "score_board": score_board,
         "best_model": best_model_name,
         "nested_cv": nested_cv_summary or {},
+        "ml_tuning_mode": ml_tuning_mode,
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
@@ -1149,11 +1339,43 @@ def _save_run_artifacts(
     if dl_history:
         pd.DataFrame(dl_history).to_csv(dl_history_path, index=False)
 
+    if nested_cv_summary:
+        nested_rows: list[dict[str, Any]] = []
+        for model_name, payload in nested_cv_summary.items():
+            fold_scores = payload.get("fold_scores", [])
+            best_params = payload.get("best_params_per_fold", [])
+            for fold_idx, score in enumerate(fold_scores, start=1):
+                row = {
+                    "model": model_name.upper(),
+                    "fold": fold_idx,
+                    "score": float(score),
+                    "mean_score": float(payload.get("mean_score", float("nan"))),
+                    "std_score": float(payload.get("std_score", float("nan"))),
+                }
+                if fold_idx - 1 < len(best_params):
+                    row.update({f"param_{k}": v for k, v in best_params[fold_idx - 1].items()})
+                nested_rows.append(row)
+
+        nested_df = pd.DataFrame(nested_rows)
+        if not nested_df.empty:
+            nested_df[nested_df["model"] == "ML"].to_csv(nested_cv_ml_path, index=False)
+            nested_df[nested_df["model"] == "DL"].to_csv(nested_cv_dl_path, index=False)
+            nested_df.to_csv(nested_cv_params_path, index=False)
+
+    if ml_search_results is not None:
+        cv_results = ml_search_results.get("cv_results")
+        if isinstance(cv_results, pd.DataFrame) and not cv_results.empty:
+            cv_results.to_csv(ml_search_cv_results_path, index=False)
+
     return {
         "summary_json": str(summary_path),
         "ml_metrics_csv": str(ml_metrics_path),
         "dl_metrics_csv": str(dl_metrics_path) if dl_results is not None else "",
         "dl_history_csv": str(dl_history_path) if dl_history else "",
+        "nested_cv_ml_csv": str(nested_cv_ml_path) if nested_cv_summary else "",
+        "nested_cv_dl_csv": str(nested_cv_dl_path) if nested_cv_summary else "",
+        "nested_cv_params_csv": str(nested_cv_params_path) if nested_cv_summary else "",
+        "ml_search_cv_results_csv": str(ml_search_cv_results_path) if ml_search_results is not None else "",
     }
 
 

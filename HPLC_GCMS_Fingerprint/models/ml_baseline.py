@@ -16,9 +16,109 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from sklearn.base import BaseEstimator
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
 
 from .model_registry import build_clf_pipeline, build_reg_pipeline
+
+
+def pack_multitask_targets(
+    species: np.ndarray,
+    phylum: np.ndarray,
+    y_solvents: np.ndarray,
+    y_assays: np.ndarray,
+) -> np.ndarray:
+    """Pack multi-task targets into a 1D object array for sklearn search CV."""
+    packed = [
+        (
+            int(species[i]),
+            int(phylum[i]),
+            np.asarray(y_solvents[i], dtype=float),
+            np.asarray(y_assays[i], dtype=float),
+        )
+        for i in range(len(species))
+    ]
+    return np.asarray(packed, dtype=object)
+
+
+def unpack_multitask_targets(
+    y: np.ndarray | list | tuple,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Unpack packed multi-task targets back into their component arrays."""
+    if isinstance(y, dict):
+        return (
+            np.asarray(y["species"]),
+            np.asarray(y["phylum"]),
+            np.asarray(y["y_solvents"]),
+            np.asarray(y["y_assays"]),
+        )
+
+    y_arr = np.asarray(y, dtype=object)
+    species: list[int] = []
+    phylum: list[int] = []
+    y_solvents: list[np.ndarray] = []
+    y_assays: list[np.ndarray] = []
+
+    for item in y_arr:
+        if isinstance(item, dict):
+            species.append(int(item["species"]))
+            phylum.append(int(item["phylum"]))
+            y_solvents.append(np.asarray(item["y_solvents"], dtype=float))
+            y_assays.append(np.asarray(item["y_assays"], dtype=float))
+            continue
+
+        sp, ph, ys, ya = item
+        species.append(int(sp))
+        phylum.append(int(ph))
+        y_solvents.append(np.asarray(ys, dtype=float))
+        y_assays.append(np.asarray(ya, dtype=float))
+
+    return (
+        np.asarray(species),
+        np.asarray(phylum),
+        np.asarray(y_solvents),
+        np.asarray(y_assays),
+    )
+
+
+def score_multitask_predictions(
+    y_true: np.ndarray | list | tuple,
+    y_pred: dict[str, np.ndarray],
+) -> float:
+    """Score predictions using the same aggregate utility as the pipeline."""
+    species, phylum, y_solvents, y_assays = unpack_multitask_targets(y_true)
+
+    species_acc = accuracy_score(species, y_pred["pred_species"])
+    species_f1 = f1_score(species, y_pred["pred_species"], average="macro", zero_division=0)
+    phylum_acc = accuracy_score(phylum, y_pred["pred_phylum"])
+    phylum_f1 = f1_score(phylum, y_pred["pred_phylum"], average="macro", zero_division=0)
+
+    solvent_mae = mean_absolute_error(y_solvents, y_pred["pred_solvents"])
+    solvent_rmse = float(np.sqrt(mean_squared_error(y_solvents, y_pred["pred_solvents"])))
+    assay_mae = mean_absolute_error(y_assays, y_pred["pred_assays"])
+    assay_rmse = float(np.sqrt(mean_squared_error(y_assays, y_pred["pred_assays"])))
+
+    true_best_sol_idx = y_solvents.argmax(axis=1)
+    true_best_ass_idx = y_assays.argmax(axis=1)
+    best_sol_acc = accuracy_score(true_best_sol_idx, y_pred["best_solvent_idx"])
+    best_ass_acc = accuracy_score(true_best_ass_idx, y_pred["best_assay_idx"])
+
+    cls_terms = [
+        float(species_acc),
+        float(species_f1),
+        float(phylum_acc),
+        float(phylum_f1),
+        float(best_sol_acc),
+        float(best_ass_acc),
+    ]
+    reg_terms = [
+        1.0 / (1.0 + float(solvent_mae)),
+        1.0 / (1.0 + float(solvent_rmse)),
+        1.0 / (1.0 + float(assay_mae)),
+        1.0 / (1.0 + float(assay_rmse)),
+    ]
+    return float(np.mean(cls_terms + reg_terms))
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +236,39 @@ class MLMultiTaskBaseline:
         raise AttributeError(
             f"The '{self.clf_type}' classifier does not support predict_proba."
         )
+
+
+class MLMultiTaskSearchEstimator(BaseEstimator):
+    """Sklearn-compatible wrapper used for GridSearchCV / RandomizedSearchCV."""
+
+    def __init__(
+        self,
+        clf_type: str = "random_forest",
+        reg_type: str = "gradient_boosting",
+        n_estimators_clf: int = 300,
+        n_estimators_reg: int = 200,
+        random_state: int = 42,
+    ) -> None:
+        self.clf_type = clf_type
+        self.reg_type = reg_type
+        self.n_estimators_clf = n_estimators_clf
+        self.n_estimators_reg = n_estimators_reg
+        self.random_state = random_state
+
+    def fit(self, X: np.ndarray, y: np.ndarray | list | tuple) -> "MLMultiTaskSearchEstimator":
+        species, phylum, y_solvents, y_assays = unpack_multitask_targets(y)
+        self.model_ = MLMultiTaskBaseline(
+            clf_type=self.clf_type,
+            reg_type=self.reg_type,
+            n_estimators_clf=self.n_estimators_clf,
+            n_estimators_reg=self.n_estimators_reg,
+            random_state=self.random_state,
+        )
+        self.model_.fit(X, species, phylum, y_solvents, y_assays)
+        return self
+
+    def predict(self, X: np.ndarray) -> dict[str, np.ndarray]:
+        return self.model_.predict(X)
+
+    def score(self, X: np.ndarray, y: np.ndarray | list | tuple) -> float:
+        return score_multitask_predictions(y, self.predict(X))
