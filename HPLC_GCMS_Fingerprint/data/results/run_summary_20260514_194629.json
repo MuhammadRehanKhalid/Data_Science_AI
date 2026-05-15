@@ -1,0 +1,48 @@
+{
+  "timestamp": "20260514_194629",
+  "cli_args": {
+    "reps": 15,
+    "output": "HPLC_GCMS_Fingerprint/data/fingerprint_data.xlsx",
+    "representation": "combined",
+    "epochs": 200,
+    "batch_size": 16,
+    "skip_dl": true,
+    "figures_dir": "HPLC_GCMS_Fingerprint/figures",
+    "skip_figures": true,
+    "figure_format": "png",
+    "ml_clf": "logistic_regression",
+    "ml_reg": "ridge",
+    "dl_model": "mlp",
+    "recommend_model": false,
+    "validate_species": false,
+    "skip_optimization": true,
+    "nested_cv": false,
+    "publication_mode": false
+  },
+  "data_summary": {
+    "n_samples": 150,
+    "n_features": 320,
+    "n_species": 10,
+    "n_phyla": 6,
+    "n_solvents": 5,
+    "n_assays": 4
+  },
+  "selected_sources": [
+    "FTIR",
+    "HPLC",
+    "GCMS"
+  ],
+  "selected_ml": {
+    "clf": "logistic_regression",
+    "reg": "ridge",
+    "n_estimators_clf": 300,
+    "n_estimators_reg": 200
+  },
+  "selected_dl": null,
+  "score_board": {
+    "ML": 0.46725193362741885
+  },
+  "best_model": "ML",
+  "nested_cv": {},
+  "ml_tuning_mode": "manual"
+}

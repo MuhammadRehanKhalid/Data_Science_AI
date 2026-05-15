@@ -42,7 +42,8 @@ class SharedEncoder(nn.Module):
     def __init__(self, in_dim: int, dropout: float = 0.3) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.BatchNorm1d(in_dim),
+            # LayerNorm is stable for small/odd batch sizes, including batch size 1.
+            nn.LayerNorm(in_dim),
             nn.Linear(in_dim, 256),
             nn.ReLU(),
             nn.Dropout(dropout),

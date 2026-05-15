@@ -295,6 +295,124 @@ def plot_gcms_spectrum(
 
 
 # ---------------------------------------------------------------------------
+# 2b. FTIR spectrum (wavenumber vs transmittance)
+# ---------------------------------------------------------------------------
+
+def plot_ftir_spectrum(
+    ftir_df: pd.DataFrame,
+    output_path: Path,
+    n_samples_per_species: int = 3,
+) -> None:
+    """
+    Plot FTIR spectra (wavenumber vs transmittance/absorbance) overlaid
+    for representative samples, one colour per species/phylum.
+    
+    Identifies wavenumber columns automatically from the dataframe.
+    """
+    _apply_style()
+    
+    # Identify wavenumber columns (assumed to be numeric and not metadata)
+    metadata_cols = {"sample_id", "species", "phylum", "replicate"}
+    activity_cols = {c for c in ftir_df.columns if c.startswith("activity_")}
+    assay_cols = {c for c in ftir_df.columns if "_" in c and any(a in c for a in ["antioxidant", "antimicrobial", "antiviral"])}
+    
+    wavenumber_cols = sorted([
+        c for c in ftir_df.columns 
+        if c not in metadata_cols and c not in activity_cols and c not in assay_cols
+        and not c.startswith("intensity_")
+    ])
+    
+    if not wavenumber_cols:
+        # Fallback: assume numeric columns that look like wavenumbers
+        wavenumber_cols = sorted([c for c in ftir_df.columns if c not in metadata_cols])
+    
+    if not wavenumber_cols:
+        # No FTIR data available
+        fig, ax = plt.subplots(figsize=(8, 3))
+        ax.text(0.5, 0.5, "No FTIR spectral data found", ha="center", va="center")
+        ax.axis("off")
+        fig.tight_layout()
+        _save(fig, output_path)
+        return
+
+    # Real FTIR files may not always include phylum metadata.
+    phylum_present = "phylum" in ftir_df.columns
+    if not phylum_present:
+        ftir_df = ftir_df.copy()
+        ftir_df["phylum"] = "Unknown"
+    
+    # Convert wavenumber column names to numeric values for x-axis
+    try:
+        wavenumbers = np.array([float(c) for c in wavenumber_cols])
+    except (ValueError, TypeError):
+        # Fallback: create a numeric x-axis
+        wavenumbers = np.arange(len(wavenumber_cols))
+    
+    species_list = sorted(ftir_df["species"].unique())
+    n_sp = len(species_list)
+    n_rows, n_cols = _grid_layout(n_sp)
+    
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(6.2 * n_cols, 2.9 * n_rows),
+        sharex=True,
+    )
+    axes_flat = np.array(axes).reshape(-1)
+    
+    phylum_of = dict(zip(ftir_df["species"], ftir_df["phylum"]))
+    phylum_colors = {}
+    phyla = sorted(set(ftir_df["phylum"]))
+    if phylum_present:
+        for i, ph in enumerate(phyla):
+            phylum_colors[ph] = list(_PALETTE_PHYLA.values())[i % len(_PALETTE_PHYLA)]
+    else:
+        phylum_colors["Unknown"] = "#333333"
+    
+    for ax, sp in zip(axes_flat, species_list):
+        sub = ftir_df[ftir_df["species"] == sp].head(n_samples_per_species)
+        ph = phylum_of[sp]
+        color = phylum_colors.get(ph, "#333333")
+        
+        for rep_idx, (_, row) in enumerate(sub.iterrows()):
+            transmittance = row[wavenumber_cols].to_numpy(dtype=float)
+            alpha = 0.9 - rep_idx * 0.2
+            ax.plot(
+                wavenumbers, transmittance,
+                color=color, alpha=alpha, linewidth=0.9,
+                label=f"Rep {int(row['replicate']) if 'replicate' in row else rep_idx+1}" if rep_idx == 0 else "_nolegend_",
+            )
+            ax.fill_between(wavenumbers, transmittance, alpha=0.08, color=color)
+        
+        ax.set_ylabel("Transmittance (%)", fontsize=9)
+        ax.set_title(f"{sp}  [{ph}]" if phylum_present else sp, fontsize=10, loc="left", pad=4)
+        ax.set_xlim(wavenumbers[0], wavenumbers[-1])
+    
+    for ax in axes_flat[n_sp:]:
+        ax.set_visible(False)
+    
+    for ax in axes_flat:
+        if ax.get_visible():
+            ax.set_xlabel("Wavenumber (cm⁻¹)", fontsize=10)
+    
+    handles, labels = axes_flat[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            title="Replicate",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0),
+            fontsize=8,
+            title_fontsize=9,
+            borderaxespad=0.0,
+        )
+    
+    fig.suptitle("FTIR Spectra Profiles by Species", fontsize=13, y=1.01, fontweight="bold")
+    fig.tight_layout()
+    _save(fig, output_path)
+
+
+# ---------------------------------------------------------------------------
 # 3. Assay score heatmap (species/phylum × assay)
 # ---------------------------------------------------------------------------
 

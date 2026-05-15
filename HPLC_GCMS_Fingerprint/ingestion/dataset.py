@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -22,6 +23,28 @@ from .loader import load_and_validate
 
 # Imported to expose downstream
 from ..data_generation.constants import ASSAYS, SOLVENTS
+
+
+def _impute_non_finite_array(arr: np.ndarray, name: str) -> np.ndarray:
+    """Replace NaN/inf values column-wise using finite medians (fallback: 0.0)."""
+    out = np.asarray(arr, dtype=float).copy()
+    if out.ndim != 2:
+        return out
+
+    finite_mask = np.isfinite(out)
+    if finite_mask.all():
+        return out
+
+    n_bad = int((~finite_mask).sum())
+    for j in range(out.shape[1]):
+        col = out[:, j]
+        good = np.isfinite(col)
+        fill_value = float(np.median(col[good])) if np.any(good) else 0.0
+        col[~good] = fill_value
+        out[:, j] = col
+
+    print(f"[Dataset] Imputed {n_bad} non-finite values in {name}.")
+    return out
 
 
 @dataclass
@@ -91,19 +114,128 @@ class MultiTaskDataset:
         standardise : bool
             Whether to apply ``StandardScaler`` to X.
         """
-        hplc_df, gcms_df, _ = load_and_validate(path)
+        # Load whatever sheets are present (HPLC, GCMS, optional)
+        from .loader import load_and_validate_optional
 
-        # Align rows (samples should be identical between sheets)
-        if len(hplc_df) != len(gcms_df):
+        hplc_df, gcms_df, solvent_df = load_and_validate_optional(path)
+
+        # Build feature matrix from available sources (FTIR not expected in workbook)
+        X = build_feature_matrix(
+            hplc_df=hplc_df,
+            gcms_df=gcms_df,
+            ftir_df=None,
+            representation=representation,
+            n_bins=n_bins,
+        )
+
+        # Determine which sheet to use for targets: prefer HPLC, fallback to GCMS
+        target_df = hplc_df if hplc_df is not None else gcms_df
+        if target_df is None:
             raise ValueError(
-                f"HPLC ({len(hplc_df)}) and GC-MS ({len(gcms_df)}) "
-                "sheets have different row counts."
+                "No HPLC or GC-MS sheet available in workbook to extract targets from."
             )
 
-        X = build_feature_matrix(hplc_df, gcms_df, representation=representation, n_bins=n_bins)
+        targets = build_targets(target_df, solvents=SOLVENTS, assays=ASSAYS)
 
-        # Use HPLC sheet for targets (both sheets carry identical target cols)
-        targets = build_targets(hplc_df, solvents=SOLVENTS, assays=ASSAYS)
+        X = _impute_non_finite_array(X, name="feature matrix")
+        targets["y_solvents"] = _impute_non_finite_array(targets["y_solvents"], name="solvent targets")
+        targets["y_assays"] = _impute_non_finite_array(targets["y_assays"], name="assay targets")
+
+        scaler = None
+        if standardise:
+            scaler = StandardScaler()
+            X = scaler.fit_transform(X)
+
+        return cls(
+            X             = X,
+            species       = targets["species"],
+            phylum        = targets["phylum"],
+            y_solvents    = targets["y_solvents"],
+            y_assays      = targets["y_assays"],
+            best_solvent  = targets["best_solvent"],
+            best_assay    = targets["best_assay"],
+            species_names = targets["species_names"],
+            phylum_names  = targets["phylum_names"],
+            solvent_names = SOLVENTS,
+            assay_names   = ASSAYS,
+            scaler        = scaler,
+        )
+
+    @classmethod
+    def from_sources(
+        cls,
+        hplc_df: pd.DataFrame | None = None,
+        gcms_df: pd.DataFrame | None = None,
+        ftir_df: pd.DataFrame | None = None,
+        representation: str = "combined",
+        n_bins: int = 10,
+        standardise: bool = True,
+    ) -> "MultiTaskDataset":
+        """
+        Build a dataset directly from provided DataFrames. Any combination
+        of HPLC, GCMS and FTIR may be supplied. Targets are extracted from
+        HPLC if available, otherwise GCMS, otherwise FTIR (if it contains
+        the expected target columns).
+        """
+        def _align_frames(
+            frames: list[pd.DataFrame | None],
+        ) -> tuple[pd.DataFrame | None, ...]:
+            present = [df for df in frames if df is not None]
+            if not present:
+                return tuple(frames)
+
+            # Prefer alignment on sample_id when all sources expose it.
+            if all("sample_id" in df.columns for df in present):
+                common_ids = set(present[0]["sample_id"].astype(str))
+                for df in present[1:]:
+                    common_ids &= set(df["sample_id"].astype(str))
+                common_ids = sorted(common_ids)
+                if common_ids:
+                    aligned: list[pd.DataFrame | None] = []
+                    for df in frames:
+                        if df is None:
+                            aligned.append(None)
+                        else:
+                            aligned.append(
+                                df.assign(sample_id=df["sample_id"].astype(str)).set_index("sample_id").loc[common_ids].reset_index()
+                            )
+                    return tuple(aligned)
+
+            # Fallback: trim all sources to the smallest shared row count.
+            min_len = min(len(df) for df in present)
+            return tuple(None if df is None else df.iloc[:min_len].reset_index(drop=True) for df in frames)
+
+        hplc_df, gcms_df, ftir_df = _align_frames([hplc_df, gcms_df, ftir_df])
+
+        X = build_feature_matrix(
+            hplc_df=hplc_df,
+            gcms_df=gcms_df,
+            ftir_df=ftir_df,
+            representation=representation,
+            n_bins=n_bins,
+        )
+
+        # Choose a source that contains target/activity columns
+        target_df = None
+        for candidate in (hplc_df, gcms_df, ftir_df):
+            if candidate is None:
+                continue
+            # Check for an activity column as heuristic
+            if any(c.startswith("activity_") for c in candidate.columns):
+                target_df = candidate
+                break
+
+        if target_df is None:
+            raise ValueError(
+                "No suitable source with target/activity columns found. "
+                "Provide HPLC or GCMS (or FTIR with activity columns) to extract targets."
+            )
+
+        targets = build_targets(target_df, solvents=SOLVENTS, assays=ASSAYS)
+
+        X = _impute_non_finite_array(X, name="feature matrix")
+        targets["y_solvents"] = _impute_non_finite_array(targets["y_solvents"], name="solvent targets")
+        targets["y_assays"] = _impute_non_finite_array(targets["y_assays"], name="assay targets")
 
         scaler = None
         if standardise:
