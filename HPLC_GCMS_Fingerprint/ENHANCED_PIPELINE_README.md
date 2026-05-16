@@ -491,7 +491,9 @@ To add new features:
 
 ## License
 
-This project is released under [YOUR LICENSE HERE]
+See [LICENSE](LICENSE) for the full terms. This project is proprietary and
+all rights are reserved unless you have explicit written permission from the
+copyright holder.
 
 ---
 

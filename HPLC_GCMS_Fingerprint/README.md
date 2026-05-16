@@ -210,4 +210,6 @@ For any new sample the pipeline returns:
 
 ## License
 
-MIT
+See [LICENSE](LICENSE) for the full terms. This project is proprietary and
+all rights are reserved unless you have explicit written permission from the
+copyright holder.
