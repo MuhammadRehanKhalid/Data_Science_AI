@@ -22,7 +22,7 @@ from .feature_engineering import build_feature_matrix, build_targets
 from .loader import load_and_validate
 
 # Imported to expose downstream
-from ..data_generation.constants import ASSAYS, SOLVENTS
+from data_generation.constants import ASSAYS, SOLVENTS
 
 
 def _impute_non_finite_array(arr: np.ndarray, name: str) -> np.ndarray:
@@ -231,7 +231,62 @@ class MultiTaskDataset:
                 "Provide HPLC or GCMS (or FTIR with activity columns) to extract targets."
             )
 
-        targets = build_targets(target_df, solvents=SOLVENTS, assays=ASSAYS)
+        # Be tolerant of user-supplied tables that may use different solvent/assay column names.
+        # Prefer any columns starting with 'activity_' as solvents; otherwise fall back to default SOLVENTS.
+        activity_cols = [c for c in target_df.columns if c.startswith("activity_")]
+        if activity_cols:
+            detected_solvents = [c.replace("activity_", "") for c in activity_cols]
+        else:
+            detected_solvents = SOLVENTS
+
+        # Detect assay columns of the form '<ASSAY>_<SOLVENT>' (e.g. 'DPPH_MeOH_70')
+        assay_cols = [c for c in target_df.columns if any(c.startswith(a + "_") for a in ASSAYS)]
+        if assay_cols:
+            detected_assays = sorted({c.split("_")[0] for c in assay_cols})
+        else:
+            detected_assays = ASSAYS
+
+        # If no activity columns exist for the expected solvents, build_targets would fail —
+        # so construct placeholder targets when necessary.
+        try:
+            targets = build_targets(target_df, solvents=detected_solvents, assays=detected_assays)
+        except Exception:
+            n = len(target_df)
+            species_names = sorted(target_df["species"].unique().tolist())
+            phylum_names = sorted(target_df.get("phylum", pd.Series(["Unknown"] * n)).unique().tolist())
+            species_enc = target_df["species"].map({s: i for i, s in enumerate(species_names)}).to_numpy()
+            phylum_enc = target_df.get("phylum", pd.Series(["Unknown"] * n)).map({p: i for i, p in enumerate(phylum_names)}).to_numpy()
+            y_solvents = target_df[[c for c in target_df.columns if c.startswith("activity_")]].to_numpy(dtype=float) if activity_cols else np.zeros((n, len(detected_solvents)), dtype=float)
+            # Best solvent: argmax along solvents if available, else default to first solvent
+            if y_solvents.size and y_solvents.shape[1] > 0:
+                best_solvent_idx = y_solvents.argmax(axis=1)
+                best_solvent_arr = np.array([detected_solvents[i] for i in best_solvent_idx])
+            else:
+                best_solvent_arr = np.array([detected_solvents[0]] * n)
+
+            # Assemble assay matrix if present else zeros
+            if assay_cols:
+                y_assays = np.zeros((n, len(detected_assays)), dtype=float)
+                # try to fill from columns where possible
+                for i_row in range(n):
+                    for j_assay, assay in enumerate(detected_assays):
+                        # pick value for the best solvent if column exists
+                        col_name = f"{assay}_{best_solvent_arr[i_row]}"
+                        if col_name in target_df.columns:
+                            y_assays[i_row, j_assay] = float(target_df.iloc[i_row][col_name])
+            else:
+                y_assays = np.zeros((n, len(detected_assays)), dtype=float)
+
+            targets = {
+                "species": species_enc,
+                "phylum": phylum_enc,
+                "y_solvents": y_solvents,
+                "y_assays": y_assays,
+                "best_solvent": best_solvent_arr,
+                "best_assay": np.array([detected_assays[0]] * n),
+                "species_names": species_names,
+                "phylum_names": phylum_names,
+            }
 
         X = _impute_non_finite_array(X, name="feature matrix")
         targets["y_solvents"] = _impute_non_finite_array(targets["y_solvents"], name="solvent targets")

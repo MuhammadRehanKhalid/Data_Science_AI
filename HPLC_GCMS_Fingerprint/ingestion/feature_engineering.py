@@ -45,6 +45,9 @@ def raw_features(df: pd.DataFrame, intensity_prefix: str) -> np.ndarray:
     Returns shape (n_samples, n_peaks).
     """
     cols = _intensity_cols(df, intensity_prefix)
+    n = len(df)
+    if not cols:
+        return np.zeros((n, 0), dtype=float)
     arr = df[cols].to_numpy(dtype=float)
     return _log_normalise(arr)
 
@@ -60,10 +63,15 @@ def binned_features(
     Returns shape (n_samples, n_bins).
     """
     cols = _intensity_cols(df, intensity_prefix)
-    arr = df[cols].to_numpy(dtype=float)
+    n = len(df)
+    cols = _intensity_cols(df, intensity_prefix)
+    arr = df[cols].to_numpy(dtype=float) if cols else np.zeros((n, 0), dtype=float)
     n_peaks = arr.shape[1]
     bin_edges = np.array_split(np.arange(n_peaks), n_bins)
-    binned = np.column_stack([arr[:, idx].sum(axis=1) for idx in bin_edges])
+    if n_peaks == 0:
+        binned = np.zeros((n, n_bins), dtype=float)
+    else:
+        binned = np.column_stack([arr[:, idx].sum(axis=1) for idx in bin_edges])
     return _log_normalise(binned)
 
 
@@ -78,6 +86,10 @@ def binary_features(
     Returns shape (n_samples, n_peaks).
     """
     cols = _intensity_cols(df, intensity_prefix)
+    n = len(df)
+    cols = _intensity_cols(df, intensity_prefix)
+    if not cols:
+        return np.zeros((n, 0), dtype=float)
     arr = df[cols].to_numpy(dtype=float)
     return (arr > threshold).astype(float)
 
@@ -90,6 +102,11 @@ def meta_features(df: pd.DataFrame, intensity_prefix: str) -> np.ndarray:
     Returns shape (n_samples, 6).
     """
     cols = _intensity_cols(df, intensity_prefix)
+    n = len(df)
+    cols = _intensity_cols(df, intensity_prefix)
+    if not cols:
+        return np.zeros((n, 6), dtype=float)
+
     arr = df[cols].to_numpy(dtype=float)
 
     mean_int  = arr.mean(axis=1, keepdims=True)
@@ -189,7 +206,7 @@ def build_feature_matrix(
         parts.append(ftir_part)
 
     X = np.hstack(parts)
-    print(f"[FeatureEngineering] representation='{representation}' → X.shape={X.shape}")
+    print(f"[FeatureEngineering] representation='{representation}' -> X.shape={X.shape}")
     return X
 
 
