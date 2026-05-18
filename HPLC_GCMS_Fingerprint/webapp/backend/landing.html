@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Marine Biotech Vision Lab</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #06121a;
+        --panel: rgba(9, 26, 38, 0.88);
+        --panel-strong: rgba(12, 35, 52, 0.96);
+        --border: rgba(132, 214, 255, 0.16);
+        --text: #e7f7ff;
+        --muted: #9ac0d6;
+        --accent: #62d0ff;
+        --accent-2: #7ef0c2;
+        --danger: #ff8fa3;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, Segoe UI, Arial, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(98, 208, 255, 0.16), transparent 28%),
+          radial-gradient(circle at top right, rgba(126, 240, 194, 0.14), transparent 24%),
+          linear-gradient(180deg, #041018 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .shell { max-width: 1200px; margin: 0 auto; padding: 32px 20px 40px; }
+      .hero, .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+        backdrop-filter: blur(14px);
+      }
+      .hero { padding: 28px; margin-bottom: 22px; }
+      h1, h2, h3 { margin: 0 0 12px; }
+      p { color: var(--muted); line-height: 1.6; }
+      .grid { display: grid; grid-template-columns: 1.25fr 0.95fr; gap: 20px; }
+      .card { padding: 22px; }
+      label { display: block; margin-bottom: 14px; }
+      span { display: block; margin-bottom: 6px; font-size: 0.92rem; color: var(--muted); }
+      input, select, textarea, button {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid rgba(154, 192, 214, 0.18);
+        background: var(--panel-strong);
+        color: var(--text);
+        padding: 12px 14px;
+        font: inherit;
+      }
+      textarea { resize: vertical; }
+      button {
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #031019;
+        font-weight: 700;
+        border: 0;
+      }
+      .muted { color: var(--muted); }
+      .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+      .stat { flex: 1 1 160px; padding: 14px; border-radius: 16px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); }
+      .stat strong { display: block; font-size: 1.2rem; margin-top: 4px; }
+      .result, .status, .upload { margin-top: 16px; padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); }
+      .error { color: var(--danger); }
+      pre { white-space: pre-wrap; word-break: break-word; }
+      .small { font-size: 0.92rem; }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <section class="hero">
+        <h1>Marine Biotech Vision Lab</h1>
+        <p>
+          Your app is loading directly from the FastAPI backend, so it works even when the React
+          toolchain is not installed on this machine.
+        </p>
+        <div id="health" class="status small">Loading status…</div>
+        <div class="stats">
+          <div class="stat"><span>Sources</span><strong>FTIR • HPLC • GCMS</strong></div>
+          <div class="stat"><span>Mode</span><strong>Standalone backend UI</strong></div>
+          <div class="stat"><span>API</span><strong id="api-state">Checking…</strong></div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>Prediction Console</h2>
+          <form id="predict-form">
+            <label><span>Sample ID</span><input name="sample_id" value="FTIR_S001" /></label>
+            <label><span>Project area</span><input name="project_area" value="marine-biotech" /></label>
+            <label>
+              <span>Source type</span>
+              <select name="source_type">
+                <option>FTIR</option>
+                <option>HPLC</option>
+                <option>GCMS</option>
+              </select>
+            </label>
+            <label><span>Notes</span><textarea name="notes" rows="4">Ocean-derived biomass screening</textarea></label>
+            <button type="submit">Run prediction</button>
+          </form>
+          <div id="prediction-result" class="result" hidden></div>
+        </div>
+
+        <div class="card">
+          <h2>Upload check</h2>
+          <p class="muted">Upload a CSV to inspect basic quality stats before prediction.</p>
+          <form id="upload-form">
+            <label><span>CSV file</span><input id="upload-file" type="file" accept=".csv" /></label>
+            <button type="submit">Inspect upload</button>
+          </form>
+          <div id="upload-result" class="upload" hidden></div>
+          <div id="pipeline-result" class="status"></div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const health = document.getElementById('health');
+      const apiState = document.getElementById('api-state');
+      const predictionResult = document.getElementById('prediction-result');
+      const uploadResult = document.getElementById('upload-result');
+      const pipelineResult = document.getElementById('pipeline-result');
+
+      const renderBox = (element, content, hidden = false) => {
+        element.hidden = hidden;
+        element.innerHTML = content;
+      };
+
+      async function loadMeta() {
+        try {
+          const response = await fetch('/api/meta');
+          const data = await response.json();
+          apiState.textContent = data.model_status?.available ? 'Model loaded' : 'Demo fallback';
+          health.innerHTML = `<strong>API ready.</strong> ${data.deployment_hint}`;
+        } catch (error) {
+          apiState.textContent = 'Offline';
+          health.innerHTML = `<span class="error">Backend unavailable:</span> ${error.message}`;
+        }
+      }
+
+      async function loadPipeline() {
+        try {
+          const response = await fetch('/api/pipeline-status');
+          const data = await response.json();
+          if (!data.available) {
+            pipelineResult.innerHTML = '<strong>No pipeline artifacts found yet.</strong>';
+            return;
+          }
+          const rows = (data.latest_predictions || []).map((row) => `<li>${row.sample_id || 'sample'} — ${row.predicted_species || 'n/a'} (${row.predicted_phylum || 'unknown'})</li>`).join('');
+          pipelineResult.innerHTML = `<strong>Latest pipeline output</strong><pre>${data.insights_excerpt || 'No insights excerpt available.'}</pre><ul>${rows}</ul>`;
+        } catch {
+          pipelineResult.innerHTML = '<span class="error">Could not load pipeline status.</span>';
+        }
+      }
+
+      document.getElementById('predict-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const payload = {
+          sample_id: form.get('sample_id'),
+          project_area: form.get('project_area'),
+          source_type: form.get('source_type'),
+          payload: { notes: form.get('notes') },
+        };
+
+        try {
+          const response = await fetch('/api/predict', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          renderBox(
+            predictionResult,
+            `<strong>${data.predicted_label}</strong><p>${data.summary}</p><p class="small">Confidence: ${Math.round((data.confidence || 0) * 100)}%</p>`,
+            false,
+          );
+        } catch (error) {
+          renderBox(predictionResult, `<span class="error">${error.message}</span>`, false);
+        }
+      });
+
+      document.getElementById('upload-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const file = document.getElementById('upload-file').files[0];
+        if (!file) {
+          renderBox(uploadResult, '<span class="error">Choose a CSV file first.</span>', false);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('source_type', 'FTIR');
+
+        try {
+          const response = await fetch('/api/analyze-upload', { method: 'POST', body: formData });
+          const data = await response.json();
+          renderBox(uploadResult, `<strong>${data.filename || file.name}</strong><p>${data.summary}</p><p class="small">Rows: ${data.rows ?? 'n/a'} • Columns: ${data.columns ?? 'n/a'} • Non-numeric cells: ${data.non_numeric_cells ?? 'n/a'}</p>`, false);
+        } catch (error) {
+          renderBox(uploadResult, `<span class="error">${error.message}</span>`, false);
+        }
+      });
+
+      loadMeta();
+      loadPipeline();
+    </script>
+  </body>
+</html>

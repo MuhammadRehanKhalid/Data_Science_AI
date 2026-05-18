@@ -13,14 +13,14 @@ try:
     from torch.optim import Adam
     from torch.optim.lr_scheduler import ReduceLROnPlateau
     from torch.utils.data import DataLoader, TensorDataset
-    from ..models.dl_multitask import MultiTaskDLModel
+    from models.dl_multitask import MultiTaskDLModel
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
     MultiTaskDLModel = None  # type: ignore[assignment,misc]
 
-from ..ingestion.dataset import MultiTaskDataset
-from ..models.ml_baseline import MLMultiTaskBaseline
+from ingestion.dataset import MultiTaskDataset
+from models.ml_baseline import MLMultiTaskBaseline
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +34,7 @@ def train_ml(
     n_estimators_clf: int = 300,
     n_estimators_reg: int = 200,
     random_state: int = 42,
+    progress_callback: callable | None = None,
 ) -> MLMultiTaskBaseline:
     """
     Fit the ML multi-task baseline on training data.
@@ -61,6 +62,12 @@ def train_ml(
         y_solvents = train_ds.y_solvents,
         y_assays   = train_ds.y_assays,
     )
+    # Report final progress if requested
+    if progress_callback is not None:
+        try:
+            progress_callback(100.0, {"stage": "ml_fit_complete"})
+        except Exception:
+            pass
     return model
 
 
@@ -89,6 +96,7 @@ def train_dl(
     patience: int = 30,
     random_state: int = 42,
     device: Optional[str] = None,
+    progress_callback: callable | None = None,
 ) -> "tuple[MultiTaskDLModel, list[dict]]":
     """
     Train the PyTorch multi-task model.
@@ -208,6 +216,14 @@ def train_dl(
             **{f"val_{k}": v.item() for k, v in val_comps.items()},
         }
         history.append(log)
+
+        # call progress callback if provided (epoch progress)
+        if progress_callback is not None:
+            try:
+                pct = round((epoch / float(epochs)) * 100.0, 2)
+                progress_callback(pct, log)
+            except Exception:
+                pass
 
         if val_loss.item() < best_val_loss:
             best_val_loss = val_loss.item()

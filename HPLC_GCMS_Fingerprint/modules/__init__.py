@@ -17,27 +17,12 @@ Modules:
 __version__ = "2.0.0"
 __author__ = "Research Team"
 
-from .taxonomy_fetcher import NCBITaxonomyFetcher, PredictionTaxonomyTracer
-from .data_input_validator import DataSourceSelector, MultiSourceDataLoader
-from .biodata_collector import BiodataCollector, BiodataManager
-from .prediction_analyzer import PredictionAnalyzer, PhylumPredictor, ConfidenceAssessor
-from .report_generator import PDFReportGenerator, ReportContentBuilder
-from .insights_analyzer import InsightsGenerator, InsightReportBuilder
-from .sample_data_generator import SampleDataGenerator
+# "modules" package provides several optional utilities. Importing the whole
+# package should not eagerly require heavy optional dependencies (e.g. Biopython).
+# Expose only the lightweight `SampleDataGenerator` here to keep imports cheap.
+try:
+  from .sample_data_generator import SampleDataGenerator
+except Exception:
+  SampleDataGenerator = None
 
-__all__ = [
-    "NCBITaxonomyFetcher",
-    "PredictionTaxonomyTracer",
-    "DataSourceSelector",
-    "MultiSourceDataLoader",
-    "BiodataCollector",
-    "BiodataManager",
-    "PredictionAnalyzer",
-    "PhylumPredictor",
-    "ConfidenceAssessor",
-    "PDFReportGenerator",
-    "ReportContentBuilder",
-    "InsightsGenerator",
-    "InsightReportBuilder",
-    "SampleDataGenerator"
-]
+__all__ = ["SampleDataGenerator"]
