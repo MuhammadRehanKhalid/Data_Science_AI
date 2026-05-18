@@ -1,0 +1,12 @@
+model,metric,value
+ML,species_accuracy,0.5454545454545454
+ML,species_f1_macro,0.4848484848484848
+ML,phylum_accuracy,0.7272727272727273
+ML,phylum_f1_macro,0.753968253968254
+ML,solvents_mae,0.07467378831969607
+ML,solvents_rmse,0.09061108858853816
+ML,assays_mae,0.10937007548253191
+ML,assays_rmse,0.13610702618653173
+ML,best_solvent_accuracy,0.6363636363636364
+ML,best_assay_accuracy,0.2727272727272727
+ML,aggregate_score,0.7049678201761821

@@ -1207,30 +1207,60 @@ def _generate_figures(
         print(f"    ✓ Training curves")
         generated_fig_count += 1
 
-    # 10. Feature importance (RF species head)
+    # 10. Feature importance (species head)
     import numpy as np
-    rf = ml_model.head_species.named_steps["clf"]
-    importances = rf.feature_importances_
-    # Build feature names: combined = raw(130) + binned(20) + binary(130) + meta(12) = 292
-    _feat_names = (
-        [f"RT_{i+1:02d}_raw" for i in range(50)] +
-        [f"mz_{j+1:03d}_raw" for j in range(80)] +
-        [f"RT_bin{k+1}" for k in range(10)] +
-        [f"mz_bin{k+1}" for k in range(10)] +
-        [f"RT_{i+1:02d}_bin" for i in range(50)] +
-        [f"mz_{j+1:03d}_bin" for j in range(80)] +
-        [f"HPLC_meta_{m}" for m in ["mean","std","npks","skew","max","div"]] +
-        [f"GCMS_meta_{m}" for m in ["mean","std","npks","skew","max","div"]]
-    )
-    if len(_feat_names) != len(importances):
-        _feat_names = [f"feat_{i}" for i in range(len(importances))]
-    plot_feature_importance(
-        importances, _feat_names,
-        title="RF Feature Importance – Species Head",
-        output_path=figures_dir / f"10_feature_importance{ext}",
-    )
-    print(f"    ✓ Feature importance")
-    generated_fig_count += 1
+
+    def _extract_feature_importances(estimator, X, y):
+        if hasattr(estimator, "feature_importances_"):
+            return np.asarray(estimator.feature_importances_, dtype=float)
+
+        if hasattr(estimator, "coef_"):
+            coef = np.asarray(estimator.coef_, dtype=float)
+            if coef.ndim == 1:
+                return np.abs(coef)
+            return np.mean(np.abs(coef), axis=0)
+
+        try:
+            from sklearn.inspection import permutation_importance
+
+            result = permutation_importance(
+                ml_model.head_species,
+                X,
+                y,
+                n_repeats=5,
+                random_state=42,
+                scoring="accuracy",
+                n_jobs=-1,
+            )
+            return np.asarray(result.importances_mean, dtype=float)
+        except Exception:
+            return None
+
+    clf = ml_model.head_species.named_steps["clf"]
+    importances = _extract_feature_importances(clf, test_ds.X, test_ds.species)
+    if importances is None:
+        print("    • Feature importance skipped (model does not expose coefficients or importances)")
+    else:
+        # Build feature names: combined = raw(130) + binned(20) + binary(130) + meta(12) = 292
+        _feat_names = (
+            [f"RT_{i+1:02d}_raw" for i in range(50)] +
+            [f"mz_{j+1:03d}_raw" for j in range(80)] +
+            [f"RT_bin{k+1}" for k in range(10)] +
+            [f"mz_bin{k+1}" for k in range(10)] +
+            [f"RT_{i+1:02d}_bin" for i in range(50)] +
+            [f"mz_{j+1:03d}_bin" for j in range(80)] +
+            [f"HPLC_meta_{m}" for m in ["mean","std","npks","skew","max","div"]] +
+            [f"GCMS_meta_{m}" for m in ["mean","std","npks","skew","max","div"]]
+        )
+        if len(_feat_names) != len(importances):
+            _feat_names = [f"feat_{i}" for i in range(len(importances))]
+        plot_feature_importance(
+            importances, _feat_names,
+            title="ML Feature Importance – Species Head",
+            output_path=figures_dir / f"10_feature_importance{ext}",
+        )
+        print(f"    ✓ Feature importance")
+        generated_fig_count += 1
 
     # 11. Predicted vs true scatter – solvent head
     plot_prediction_scatter(
@@ -1362,7 +1392,7 @@ def _generate_figures(
         print(f"    • Training Curves (DL Model)")
     
     print(f"\n  REGRESSION EVALUATION FIGURES [{sources_str}]:")
-    print(f"    • Feature Importance (RF Species Head)")
+    print(f"    • Feature Importance (Species Head)")
     print(f"    • Solvent Activity Predictions (ML Baseline)")
     print(f"    • Assay Performance Predictions (ML Baseline)")
     if dl_model is not None:

@@ -7,3 +7,22 @@ torch>=2.1
 matplotlib>=3.7
 seaborn>=0.13
 python-docx>=1.1
+
+
+# I’m checking the prediction/evaluation flow for single-source runs so I can answer exactly what the pipeline returns and what it cannot infer from unknown species.
+
+# Searched for regex `single source|selected_sources|best_solvent|species_names|assay_names|antioxidant` (`**/HPLC_GCMS_Fingerprint/**/*.py`), 100 results
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/run_pipeline.py#920-920), lines 920 to 1125
+
+# I’ve confirmed the pipeline still produces the per-sample recommendation step on single-source runs; I’m checking the exact output fields so I can answer whether “unknown species” is inferred or only predicted from the source features.
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/run_pipeline.py#680-680), lines 680 to 760
+
+# Read [](file:///c%3A/Data_Science_AI/HPLC_GCMS_Fingerprint/evaluation/metrics.py#220-220), lines 220 to 282
+
+# Yes, for a single-source run the pipeline still trains and predicts the same multitask outputs from that one source’s feature matrix. The per-sample recommendation step returns predicted species, predicted phylum, solvent activities, best solvent, assay performances, and best assay; see evaluation/metrics.py and the call site in run_pipeline.py.
+
+# The important caveat is species. The model can only predict among species it was trained on. If the species is truly unknown, it will still assign one of the known species labels rather than flagging a new species. In other words, it is a classifier, not a novelty detector. If you need unknown-species handling, that would need a separate validation or anomaly-detection step.
+
+# If by “antioxidant model” you mean the assay-performance head, then yes, that part is also predicted and it returns a best-assay choice. If you want, I can point out exactly which single-source modes support the assay outputs best.
