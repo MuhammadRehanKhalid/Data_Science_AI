@@ -90,6 +90,17 @@ Example – larger dataset, longer DL training:
 python run_pipeline.py --reps 30 --epochs 500
 ```
 
+### Windows executable build
+
+If you want a Windows `.exe` for the pipeline, build it from the repository root:
+
+```powershell
+.\build_pipeline_exe.ps1
+```
+
+The packaged app will be created in `dist\HPLC_GCMS_Pipeline\HPLC_GCMS_Pipeline.exe`.
+It opens a desktop GUI that launches the pipeline and shows the live console log.
+
 ### Data Layout Help
 
 If you want to prepare your own CSV files, use the schema guide in [data/source_templates/README.txt](data/source_templates/README.txt). It shows the required metadata, fingerprint columns, and target columns for FTIR, HPLC, GC-MS, and mixed-source training.
