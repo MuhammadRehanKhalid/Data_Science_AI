@@ -13,6 +13,7 @@ from sklearn.metrics import (
     mean_squared_error,
     classification_report,
 )
+from sklearn.metrics import precision_score, recall_score, balanced_accuracy_score, r2_score, explained_variance_score
 
 import torch
 
@@ -29,6 +30,9 @@ def classification_metrics(
     """Return accuracy and macro-F1 for a classification head."""
     acc = accuracy_score(y_true, y_pred)
     f1  = f1_score(y_true, y_pred, average="macro", zero_division=0)
+    precision = precision_score(y_true, y_pred, average="macro", zero_division=0)
+    recall = recall_score(y_true, y_pred, average="macro", zero_division=0)
+    bal_acc = balanced_accuracy_score(y_true, y_pred)
 
     labels = np.unique(np.concatenate([np.asarray(y_true), np.asarray(y_pred)]))
     if target_names is not None:
@@ -42,7 +46,14 @@ def classification_metrics(
         target_names=report_target_names,
         zero_division=0,
     )
-    return {"accuracy": acc, "f1_macro": f1, "report": report}
+    return {
+        "accuracy": acc,
+        "f1_macro": f1,
+        "precision_macro": precision,
+        "recall_macro": recall,
+        "balanced_accuracy": bal_acc,
+        "report": report,
+    }
 
 
 def regression_metrics(
@@ -60,6 +71,15 @@ def regression_metrics(
     """
     mae_overall  = float(mean_absolute_error(y_true, y_pred))
     rmse_overall = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    # R2 and explained variance give additional regression diagnostics
+    try:
+        r2_overall = float(r2_score(y_true, y_pred))
+    except Exception:
+        r2_overall = float('nan')
+    try:
+        evs_overall = float(explained_variance_score(y_true, y_pred))
+    except Exception:
+        evs_overall = float('nan')
 
     per_output: list[dict] = []
     for j in range(y_true.shape[1]):
@@ -71,6 +91,8 @@ def regression_metrics(
     return {
         "MAE_overall":  mae_overall,
         "RMSE_overall": rmse_overall,
+        "R2_overall":   r2_overall,
+        "explained_variance_overall": evs_overall,
         "per_output":   pd.DataFrame(per_output),
     }
 
@@ -199,14 +221,32 @@ def print_results(results: dict, model_name: str = "Model") -> None:
     sp = results["species"]
     ph = results["phylum"]
     print(f"\n[Classification]")
-    print(f"  Species  – Accuracy: {sp['accuracy']:.3f}  F1-macro: {sp['f1_macro']:.3f}")
-    print(f"  Phylum   – Accuracy: {ph['accuracy']:.3f}  F1-macro: {ph['f1_macro']:.3f}")
+    print(
+        f"  Species  – Accuracy: {sp['accuracy']:.3f}  F1-macro: {sp['f1_macro']:.3f}  "
+        f"Precision: {sp.get('precision_macro', float('nan')):.3f}  "
+        f"Recall: {sp.get('recall_macro', float('nan')):.3f}  "
+        f"BalAcc: {sp.get('balanced_accuracy', float('nan')):.3f}"
+    )
+    print(
+        f"  Phylum   – Accuracy: {ph['accuracy']:.3f}  F1-macro: {ph['f1_macro']:.3f}  "
+        f"Precision: {ph.get('precision_macro', float('nan')):.3f}  "
+        f"Recall: {ph.get('recall_macro', float('nan')):.3f}  "
+        f"BalAcc: {ph.get('balanced_accuracy', float('nan')):.3f}"
+    )
 
     sol = results["solvents"]
     ass = results["assays"]
     print(f"\n[Regression]")
-    print(f"  Solvents – MAE: {sol['MAE_overall']:.4f}  RMSE: {sol['RMSE_overall']:.4f}")
-    print(f"  Assays   – MAE: {ass['MAE_overall']:.4f}  RMSE: {ass['RMSE_overall']:.4f}")
+    print(
+        f"  Solvents – MAE: {sol['MAE_overall']:.4f}  RMSE: {sol['RMSE_overall']:.4f}  "
+        f"R2: {sol.get('R2_overall', float('nan')):.4f}  "
+        f"ExplVar: {sol.get('explained_variance_overall', float('nan')):.4f}"
+    )
+    print(
+        f"  Assays   – MAE: {ass['MAE_overall']:.4f}  RMSE: {ass['RMSE_overall']:.4f}  "
+        f"R2: {ass.get('R2_overall', float('nan')):.4f}  "
+        f"ExplVar: {ass.get('explained_variance_overall', float('nan')):.4f}"
+    )
 
     print(f"\n[Recommendation Accuracy]")
     print(f"  Best Solvent: {results['best_solvent_accuracy']:.3f}")
