@@ -58,6 +58,7 @@ import os
 import platform
 import socket
 import sys
+import warnings
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -259,6 +260,13 @@ def parse_args() -> argparse.Namespace:
         "--logs-dir", type=str, default=str(_PROJECT_ROOT / "output_logs"),
         help="Root directory for per-run logs and artifacts.",
     )
+    p.add_argument(
+        "--ignore-known-warnings", action="store_true",
+        help=(
+            "Suppress common non-critical warnings (e.g. convergence/future warnings). "
+            "Use only for cleaner output once behavior is validated."
+        ),
+    )
     return p.parse_args()
 
 
@@ -295,10 +303,9 @@ def _tee_print_and_streams(log_file_path: Path):
         tee_stderr = _TeeStream(sys.stderr, log_fh)
 
         def tee_print(*args, **kwargs):
+            # stdout/stderr are already redirected to tee streams, so one print
+            # call is enough to mirror output to console and file.
             original_print(*args, **kwargs)
-            file_kwargs = dict(kwargs)
-            file_kwargs["file"] = log_fh
-            original_print(*args, **file_kwargs)
 
         builtins.print = tee_print
         try:
@@ -332,6 +339,18 @@ def _collect_runtime_metadata(args: argparse.Namespace, runner_name: str) -> dic
         "cli_args": vars(args),
         "start_time_iso": datetime.now().isoformat(),
     }
+
+
+def _configure_warning_filters(ignore_known_warnings: bool) -> None:
+    """Apply optional warning filters for cleaner CLI output.
+
+    This intentionally does not suppress all warnings; it only filters common,
+    non-fatal noise categories when requested.
+    """
+    if not ignore_known_warnings:
+        return
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +531,7 @@ def _run_source_comparison(args) -> None:
 
 def main() -> None:
     args = parse_args()
+    _configure_warning_filters(args.ignore_known_warnings)
 
     runner_name = args.runner_name.strip() or getpass.getuser()
     runner_slug = _safe_slug(runner_name, fallback="runner")
@@ -537,7 +557,7 @@ def main() -> None:
         print("=" * 80 + "\n")
 
         output_path = Path(args.output)
-        figures_dir = Path(args.figures_dir)
+        figures_dir = run_root / "graphs"
         # Handle comparison mode
         if args.compare_sources:
             _print_source_comparison_guide()
