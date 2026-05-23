@@ -1,0 +1,116 @@
+I'll add a small plan to the todo list covering packaging steps, then give a clear, beginner-friendly step-by-step guide you can follow.
+
+Added 2 todos
+
+Below is a beginner-friendly, step-by-step plan you can follow (I’ll do any steps for you if you want). I keep instructions minimal and show exact commands to copy/paste.
+
+High-level approach (recommended)
+- Make a small CLI entry for the pipeline (so you can run `run-pipeline` after install).
+- Package the project as a standard Python package (wheel) for testing.
+- Once the wheel works, create a PyInstaller `--onedir` build to produce a Windows distributable.
+- Iterate on missing modules/DLLs (I can help).
+
+Step 0 — assumptions and prep
+- I assume your pipeline code lives in HPLC_GCMS_Fingerprint and run_pipeline.py is the entry script.
+- Work on Windows. Use a fresh venv for building.
+- Save your work (commit or backup) before we change files.
+
+Step 1 — Add a tiny CLI wrapper
+Create `HPLC_GCMS_Fingerprint/cli.py` with a safe `main()` that runs the module. This avoids relying on a specific `main()` in run_pipeline.py:
+
+- File: `HPLC_GCMS_Fingerprint/cli.py`
+```python
+def main():
+    import runpy
+    runpy.run_module("HPLC_GCMS_Fingerprint.run_pipeline", run_name="__main__")
+```
+
+Step 2 — Add packaging metadata (`pyproject.toml`)
+Create `pyproject.toml` in the repository root (simple setuptools config). Replace project `name`/`version` as needed.
+
+- File: `pyproject.toml`
+```toml
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hplc_gcms_pipeline"
+version = "0.1.0"
+description = "HPLC/GC-MS fingerprint pipeline"
+readme = "HPLC_GCMS_Fingerprint/README.md"
+authors = [{name="You"}]
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "scipy>=1.11",
+  "scikit-learn>=1.3",
+  "openpyxl>=3.1",
+  "matplotlib>=3.7",
+  "seaborn>=0.13",
+  "python-docx>=1.1",
+  "torch>=2.1"
+]
+
+[project.scripts]
+run-pipeline = "HPLC_GCMS_Fingerprint.cli:main"
+```
+
+Step 3 — Create a clean virtual environment and install build tools
+Run these commands in PowerShell from repo root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip build setuptools wheel
+pip install -r HPLC_GCMS_Fingerprint/requirements.txt
+```
+
+Step 4 — Build and test the wheel locally
+```powershell
+python -m build
+pip install dist\hplc_gcms_pipeline-0.1.0-py3-none-any.whl
+# Run installed console script
+run-pipeline
+```
+- If `run-pipeline` runs your script, packaging works. Fix any import errors in a normal Python run first.
+
+Step 5 — Prepare for PyInstaller builds
+- Keep heavy deps in requirements.txt. For packaging, prefer `--onedir` while debugging.
+- We already added `run_pipeline.spec` and `hooks/hook-torch.py`; if you want I can refine them.
+
+Step 6 — Build Windows distributable (onedir) — in the venv
+```powershell
+# from repo root, venv activated
+python -m PyInstaller --clean --noconfirm --log-level=INFO run_pipeline.spec
+# or simpler (makes a new spec automatically)
+python -m PyInstaller --clean --noconfirm --log-level=INFO --additional-hooks-dir=HPLC_GCMS_Fingerprint/hooks HPLC_GCMS_Fingerprint/run_pipeline.py
+```
+- Inspect `dist\run_pipeline\` and run `.\dist\run_pipeline\run_pipeline.exe` to reproduce runtime errors.
+
+Step 7 — Debug runtime errors iteratively
+- If missing `python310.dll`: rebuild in the same Python install or ensure the DLL is present and not quarantined.
+- If ModuleNotFoundError: add `--hidden-import=<module>` or update `hiddenimports` in the `.spec` file or create `hooks/hook-<package>.py`.
+- If DLLs for `numpy` / `torch` missing: add `collect_dynamic_libs(...)` in hooks (we added a `hook-torch.py` starter).
+
+Step 8 — Make distribution convenient
+- For simple releases: zip the `dist\run_pipeline` folder and share.
+- For installers: create NSIS/Inno Setup script to wrap the `dist` content into an installer and optionally add shortcuts.
+- Add an auto-update strategy later (check a version endpoint and download the new installer).
+
+Short guidance and tips for someone newer to packaging
+- Work step-by-step: first make sure the pipeline runs in a plain venv (no packaging). Fix import/runtime errors there before packaging.
+- Use `--onedir` builds — easier to inspect included files.
+- Keep large ML training out of the shipped exe if possible: provide pre-trained models or make training an optional separate step, so the exe focuses on inference/analysis.
+- Back up before mass deletions/edits; use git branches.
+
+I can help by doing any of these for you:
+- Create the `cli.py` and `pyproject.toml` files automatically (I can add them now).
+- Create a small documented script to create the venv and build the wheel.
+- Run a PyInstaller `--onedir` build and analyze the first runtime error logs, then produce precise `hiddenimports` / hook edits.
+
+Which do you want me to do now?
+- A: Add `cli.py` + `pyproject.toml` to the repo.
+- B: Create the venv and build the wheel locally (I can run these here if you want).
+- C: Try a `PyInstaller --onedir` build and capture runtime errors.
