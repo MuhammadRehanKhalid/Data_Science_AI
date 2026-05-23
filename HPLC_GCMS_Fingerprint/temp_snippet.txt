@@ -1,0 +1,54 @@
+    # ------------------------------------------------------------------
+        if args.validate_species:
+            print("\n" + "="*60)
+            print("  Species Name Validation Check")
+            print("="*60)
+        
+            from HPLC_GCMS_Fingerprint.data_generation.constants import SPECIES
+        
+            fetcher = NCBITaxonomyFetcher(
+            cache_file=output_path.parent / "taxonomy_cache.csv"
+            )
+            validation_results = fetcher.validate_species_names(SPECIES)
+        
+            if validation_results['failed']:
+                print("\n[ERROR] Species validation failed!")
+                print("Please fix the following species names before running the pipeline:")
+                for species in validation_results['failed']:
+                    print(f"  - {species}")
+                sys.exit(1)
+                else:
+                print("\n[OK] All species names validated successfully!")
+                print("Proceeding with pipeline...\n")
+    
+    # ------------------------------------------------------------------
+    # Step 0: Data Mode Selection (DUMMY or REAL)
+    # ------------------------------------------------------------------
+        print("\n" + "="*60)
+        print("  Step 0 – Data Mode Selection")
+        print("="*60)
+    
+        data_gen = SampleDataGenerator()
+        data_mode = data_gen.ask_data_mode()
+
+        source_selector = DataSourceSelector()
+        source_selector.print_welcome()
+        selected_sources = source_selector.ask_source_selection()
+        print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
+
+        combo_slug = _safe_slug("_".join(sorted(s.upper() for s in selected_sources)), fallback="UNSPECIFIED")
+        combo_graph_dir = run_root / "graphs" / f"combo_{combo_slug}"
+        combo_graph_dir.mkdir(parents=True, exist_ok=True)
+
+        # If no --figures-dir was provided, default to per-run artifact graphs
+        if not args.figures_dir:
+            figures_dir = combo_graph_dir
+        else:
+            figures_dir = Path(args.figures_dir)
+            figures_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
+        print(f"[OK] Graphs for this run will be stored at: {figures_dir}")
+    
+    # ------------------------------------------------------------------
+    # Step 0.5: Optional Biodata Collection
+    # ------------------------------------------------------------------

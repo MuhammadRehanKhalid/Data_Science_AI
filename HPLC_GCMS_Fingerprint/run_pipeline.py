@@ -50,8 +50,15 @@ Usage Examples
 from __future__ import annotations
 
 import argparse
+import builtins
+import contextlib
+import getpass
 import json
+import os
+import platform
+import socket
 import sys
+import warnings
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -156,8 +163,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip the PyTorch DL model (ML baseline only).",
     )
     p.add_argument(
-        "--figures-dir", type=str, default="HPLC_GCMS_Fingerprint/figures",
-        help="Output directory for all generated figures.",
+        "--figures-dir", type=str, default=None,
+        help=(
+            "Output directory for all generated figures. If omitted, figures "
+            "are written under the per-run artifacts folder (recommended)."
+        ),
     )
     p.add_argument(
         "--skip-figures", action="store_true",
@@ -242,7 +252,105 @@ def parse_args() -> argparse.Namespace:
             "Generates report showing model performance and figure count per combination."
         ),
     )
+    p.add_argument(
+        "--runner-name", type=str, default="",
+        help="Optional name of the person running the pipeline. Defaults to OS username.",
+    )
+    p.add_argument(
+        "--logs-dir", type=str, default=str(_PROJECT_ROOT / "output_logs"),
+        help="Root directory for per-run logs and artifacts.",
+    )
+    p.add_argument(
+        "--ignore-known-warnings", action="store_true",
+        help=(
+            "Suppress common non-critical warnings (e.g. convergence/future warnings). "
+            "Use only for cleaner output once behavior is validated."
+        ),
+    )
     return p.parse_args()
+
+
+def _safe_slug(value: str, fallback: str = "unknown") -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())
+    cleaned = cleaned.strip("_")
+    return cleaned or fallback
+
+
+class _TeeStream:
+    """Mirror text to console and a file stream."""
+
+    def __init__(self, stream, file_handle):
+        self.stream = stream
+        self.file_handle = file_handle
+
+    def write(self, text: str) -> int:
+        self.stream.write(text)
+        self.file_handle.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+        self.file_handle.flush()
+
+
+@contextlib.contextmanager
+def _tee_print_and_streams(log_file_path: Path):
+    """Capture all prints/stdout/stderr while keeping console output visible."""
+    original_print = builtins.print
+
+    with log_file_path.open("w", encoding="utf-8") as log_fh:
+        tee_stdout = _TeeStream(sys.stdout, log_fh)
+        tee_stderr = _TeeStream(sys.stderr, log_fh)
+
+        def tee_print(*args, **kwargs):
+            # stdout/stderr are already redirected to tee streams, so one print
+            # call is enough to mirror output to console and file.
+            original_print(*args, **kwargs)
+
+        builtins.print = tee_print
+        try:
+            with contextlib.redirect_stdout(tee_stdout), contextlib.redirect_stderr(tee_stderr):
+                yield
+        finally:
+            builtins.print = original_print
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Recursively convert dataframes/arrays to JSON-safe objects."""
+    if isinstance(value, pd.DataFrame):
+        return value.to_dict(orient="records")
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, dict):
+        return {k: _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_json_safe(v) for v in value]
+    return value
+
+
+def _collect_runtime_metadata(args: argparse.Namespace, runner_name: str) -> dict[str, Any]:
+    return {
+        "runner_name": runner_name,
+        "host": socket.gethostname(),
+        "platform": platform.platform(),
+        "python_version": sys.version,
+        "working_directory": os.getcwd(),
+        "process_id": os.getpid(),
+        "cli_args": vars(args),
+        "start_time_iso": datetime.now().isoformat(),
+    }
+
+
+def _configure_warning_filters(ignore_known_warnings: bool) -> None:
+    """Apply optional warning filters for cleaner CLI output.
+
+    This intentionally does not suppress all warnings; it only filters common,
+    non-fatal noise categories when requested.
+    """
+    if not ignore_known_warnings:
+        return
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # ---------------------------------------------------------------------------
@@ -423,61 +531,97 @@ def _run_source_comparison(args) -> None:
 
 def main() -> None:
     args = parse_args()
-    output_path = Path(args.output)
-    figures_dir = Path(args.figures_dir)
-    
-    # Handle comparison mode
-    if args.compare_sources:
-        _print_source_comparison_guide()
-        _run_source_comparison(args)
-        return
+    _configure_warning_filters(args.ignore_known_warnings)
 
-    if args.publication_mode:
-        args.nested_cv = True
-        args.skip_optimization = False
-        print("\n[Publication mode enabled] Nested CV and optimization are on; artifacts will be exported for reporting.")
+    runner_name = args.runner_name.strip() or getpass.getuser()
+    runner_slug = _safe_slug(runner_name, fallback="runner")
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_folder = datetime.now().strftime("%Y-%m-%d")
+    run_root = Path(args.logs_dir) / date_folder / runner_slug / f"run_{run_ts}"
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    runtime_metadata = _collect_runtime_metadata(args, runner_name)
+    runtime_metadata_path = run_root / "runtime_metadata.json"
+    runtime_metadata_path.write_text(json.dumps(runtime_metadata, indent=2), encoding="utf-8")
+
+    log_file_path = run_root / "test_output.log"
+
+    with _tee_print_and_streams(log_file_path):
+        print("\n" + "=" * 80)
+        print("  RUN ARTIFACT INITIALIZATION")
+        print("=" * 80)
+        print(f"  Runner       : {runner_name}")
+        print(f"  Run ID       : {run_ts}")
+        print(f"  Run folder   : {run_root}")
+        print(f"  Output log   : {log_file_path}")
+        print("=" * 80 + "\n")
+
+        output_path = Path(args.output)
+        figures_dir = run_root / "graphs"
+        # Handle comparison mode
+        if args.compare_sources:
+            _print_source_comparison_guide()
+            _run_source_comparison(args)
+            return
+
+        if args.publication_mode:
+            args.nested_cv = True
+            args.skip_optimization = False
+            print("\n[Publication mode enabled] Nested CV and optimization are on; artifacts will be exported for reporting.")
     
     # ------------------------------------------------------------------
     # Pre-flight Check: Validate Species Names (if requested)
     # ------------------------------------------------------------------
-    if args.validate_species:
-        print("\n" + "="*60)
-        print("  Species Name Validation Check")
-        print("="*60)
-        
-        from HPLC_GCMS_Fingerprint.data_generation.constants import SPECIES
-        
-        fetcher = NCBITaxonomyFetcher(
-            cache_file=output_path.parent / "taxonomy_cache.csv"
-        )
-        validation_results = fetcher.validate_species_names(SPECIES)
-        
-        if validation_results['failed']:
-            print("\n[ERROR] Species validation failed!")
-            print("Please fix the following species names before running the pipeline:")
-            for species in validation_results['failed']:
-                print(f"  - {species}")
-            sys.exit(1)
-        else:
-            print("\n[OK] All species names validated successfully!")
-            print("Proceeding with pipeline...\n")
+            if args.validate_species:
+                print("\n" + "="*60)
+                print("  Species Name Validation Check")
+                print("="*60)
+
+                from HPLC_GCMS_Fingerprint.data_generation.constants import SPECIES
+
+                fetcher = NCBITaxonomyFetcher(
+                    cache_file=output_path.parent / "taxonomy_cache.csv"
+                )
+                validation_results = fetcher.validate_species_names(SPECIES)
+
+                if validation_results["failed"]:
+                    print("\n[ERROR] Species validation failed!")
+                    print("Please fix the following species names before running the pipeline:")
+                    for species in validation_results["failed"]:
+                        print(f"  - {species}")
+                    sys.exit(1)
+                else:
+                    print("\n[OK] All species names validated successfully!")
+                    print("Proceeding with pipeline...\n")
     
     # ------------------------------------------------------------------
     # Step 0: Data Mode Selection (DUMMY or REAL)
     # ------------------------------------------------------------------
-    print("\n" + "="*60)
-    print("  Step 0 – Data Mode Selection")
-    print("="*60)
+        print("\n" + "="*60)
+        print("  Step 0 – Data Mode Selection")
+        print("="*60)
     
-    data_gen = SampleDataGenerator()
-    data_mode = data_gen.ask_data_mode()
+        data_gen = SampleDataGenerator()
+        data_mode = data_gen.ask_data_mode()
 
-    source_selector = DataSourceSelector()
-    source_selector.print_welcome()
-    selected_sources = source_selector.ask_source_selection()
-    print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
-    
-    print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
+        source_selector = DataSourceSelector()
+        source_selector.print_welcome()
+        selected_sources = source_selector.ask_source_selection()
+        print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
+
+        combo_slug = _safe_slug("_".join(sorted(s.upper() for s in selected_sources)), fallback="UNSPECIFIED")
+        combo_graph_dir = run_root / "graphs" / f"combo_{combo_slug}"
+        combo_graph_dir.mkdir(parents=True, exist_ok=True)
+
+        # If the user did not provide `--figures-dir`, write figures into
+        # the per-run artifacts folder; otherwise use the provided path.
+        if not args.figures_dir:
+            figures_dir = combo_graph_dir
+        else:
+            figures_dir = Path(args.figures_dir)
+            figures_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n[OK] Using {data_mode.upper()} data mode for analysis")
+        print(f"[OK] Graphs for this run will be stored at: {figures_dir}")
     
     # ------------------------------------------------------------------
     # Step 0.5: Optional Biodata Collection
@@ -942,27 +1086,30 @@ def main() -> None:
             f"batch_size={selected_dl_params['batch_size']}, epochs={selected_dl_params['epochs']}"
         )
 
-    run_artifacts = _save_run_artifacts(
-        output_root=output_path.parent,
-        args=args,
-        dataset=dataset,
-        selected_sources=selected_sources,
-        selected_ml={
-            "clf": selected_ml_clf,
-            "reg": selected_ml_reg,
-            "n_estimators_clf": selected_n_estimators_clf,
-            "n_estimators_reg": selected_n_estimators_reg,
-        },
-        selected_dl=selected_dl_params if dl_results is not None else None,
-        ml_results=ml_results,
-        dl_results=dl_results,
-        best_model_name=best_model_name,
-        dl_history=dl_history,
-        nested_cv_summary=nested_cv_summary,
-        ml_tuning_mode=ml_tuning_mode,
-        ml_search_results=ml_search_results,
-    )
-    print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
+        run_artifacts = _save_run_artifacts(
+            output_root=output_path.parent,
+            run_root=run_root,
+            args=args,
+            dataset=dataset,
+            selected_sources=selected_sources,
+            selected_ml={
+                "clf": selected_ml_clf,
+                "reg": selected_ml_reg,
+                "n_estimators_clf": selected_n_estimators_clf,
+                "n_estimators_reg": selected_n_estimators_reg,
+            },
+            selected_dl=selected_dl_params if dl_results is not None else None,
+            ml_results=ml_results,
+            dl_results=dl_results,
+            best_model_name=best_model_name,
+            dl_history=dl_history,
+            nested_cv_summary=nested_cv_summary,
+            ml_tuning_mode=ml_tuning_mode,
+            ml_search_results=ml_search_results,
+            runtime_metadata=runtime_metadata,
+            test_output_log_path=log_file_path,
+        )
+        print(f"\n  Run metadata exported: {run_artifacts['summary_json']}")
 
     # ------------------------------------------------------------------
     # Step 8: Recommendation for a new sample
@@ -1010,7 +1157,7 @@ def main() -> None:
         print("  Step 9 – Generating Figures")
         print("="*60)
         print(f"  Generating figures for selected sources: {', '.join(selected_sources)}")
-        _generate_figures(
+        figure_summary = _generate_figures(
             hplc_df=hplc_df,
             gcms_df=gcms_df,
             ftir_df=ftir_df,
@@ -1026,9 +1173,17 @@ def main() -> None:
             figure_format=args.figure_format,
             selected_sources=selected_sources,
         )
+        figure_summary_path = run_root / "graphs" / "figure_manifest.json"
+        figure_summary_path.parent.mkdir(parents=True, exist_ok=True)
+        figure_summary_path.write_text(
+            json.dumps(_to_json_safe(figure_summary), indent=2),
+            encoding="utf-8",
+        )
         print(f"\n  All figures saved to: {figures_dir}/")
+        print(f"  Figure manifest: {figure_summary_path}")
 
     print("\n✅  Pipeline completed successfully.\n")
+    print(f"Run artifacts root: {run_root}")
 
 
 # ---------------------------------------------------------------------------
@@ -1051,7 +1206,7 @@ def _generate_figures(
     figures_dir: Path,
     figure_format: str = "png",
     selected_sources: list[str] = None,
-) -> None:
+) -> dict[str, Any]:
     import torch
     figures_dir.mkdir(parents=True, exist_ok=True)
     ext = f".{figure_format}"
@@ -1403,7 +1558,67 @@ def _generate_figures(
         print(f"\n  ADDITIONAL ANALYSES:")
         print(f"    • Phylogenetic Tree (Taxonomy-based)")
     
+    # Coverage check for this source/model combination.
+    expected_ids = [
+        "07_pca_biplot",
+        "07b_plsda_biplot",
+        "08a_confusion_species_ml",
+        "08b_confusion_phylum_ml",
+        "10_feature_importance",
+        "11a_scatter_solvents_ml",
+        "11b_scatter_assays_ml",
+    ]
+    if "HPLC" in selected_sources:
+        expected_ids.extend([
+            "01_hplc_chromatograms",
+            "03_assay_heatmap",
+            "04_solvent_heatmap",
+            "05_assay_boxplots",
+            "06_solvent_barplots",
+            "12_radar_solvent",
+            "13_phylum_assay_recommendation",
+            "14_solvent_assay_interaction",
+            "15_best_solvent_distribution",
+        ])
+    if "GCMS" in selected_sources:
+        expected_ids.append("02_gcms_spectra")
+    if "FTIR" in selected_sources:
+        expected_ids.append("02b_ftir_spectra")
+    if dl_model is not None:
+        expected_ids.extend([
+            "08c_confusion_species_dl",
+            "08d_confusion_phylum_dl",
+            "09_training_curves",
+            "11c_scatter_solvents_dl",
+            "11d_scatter_assays_dl",
+        ])
+    if not taxonomy_df.empty:
+        expected_ids.append("16_phylogenetic_tree")
+
+    generated_files = sorted([p.name for p in figures_dir.glob(f"*{ext}")])
+    generated_ids = sorted({Path(name).stem for name in generated_files})
+    missing_expected = sorted(set(expected_ids) - set(generated_ids))
+
+    if missing_expected:
+        print("\n  [WARNING] Some expected figures were not generated:")
+        for missing in missing_expected:
+            print(f"    - {missing}{ext}")
+    else:
+        print("\n  [OK] Figure coverage check passed for this combination.")
+
     print(f"  " + "="*70 + "\n")
+
+    return {
+        "selected_sources": selected_sources,
+        "source_combination": sources_str,
+        "figure_format": figure_format,
+        "output_directory": str(figures_dir),
+        "generated_count": int(generated_fig_count),
+        "generated_files": generated_files,
+        "generated_ids": generated_ids,
+        "expected_ids": sorted(expected_ids),
+        "missing_expected": missing_expected,
+    }
 
 
 def _fetch_taxonomy_table(
@@ -1750,6 +1965,7 @@ def _run_nested_cv_dl(
 def _save_run_artifacts(
     *,
     output_root: Path,
+    run_root: Path,
     args: argparse.Namespace,
     dataset,
     selected_sources: list[str],
@@ -1762,20 +1978,29 @@ def _save_run_artifacts(
     nested_cv_summary: dict[str, Any] | None = None,
     ml_tuning_mode: str = "manual",
     ml_search_results: dict[str, Any] | None = None,
+    runtime_metadata: dict[str, Any] | None = None,
+    test_output_log_path: Path | None = None,
 ) -> dict[str, str]:
     """Persist run parameters and outcomes for reproducibility and publications."""
-    results_dir = output_root / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    legacy_results_dir = output_root / "results"
+    legacy_results_dir.mkdir(parents=True, exist_ok=True)
+
+    run_results_dir = run_root / "metrics"
+    run_results_dir.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_path = results_dir / f"run_summary_{ts}.json"
-    ml_metrics_path = results_dir / f"metrics_ml_{ts}.csv"
-    dl_metrics_path = results_dir / f"metrics_dl_{ts}.csv"
-    dl_history_path = results_dir / f"dl_history_{ts}.csv"
-    nested_cv_ml_path = results_dir / f"nested_cv_ml_folds_{ts}.csv"
-    nested_cv_dl_path = results_dir / f"nested_cv_dl_folds_{ts}.csv"
-    nested_cv_params_path = results_dir / f"nested_cv_best_params_{ts}.csv"
-    ml_search_cv_results_path = results_dir / f"ml_search_cv_results_{ts}.csv"
+    summary_path = run_results_dir / "run_summary.json"
+    full_metrics_json_path = run_results_dir / "full_metrics.json"
+    ml_metrics_path = run_results_dir / "metrics_ml.csv"
+    dl_metrics_path = run_results_dir / "metrics_dl.csv"
+    dl_history_path = run_results_dir / "dl_history.csv"
+    nested_cv_ml_path = run_results_dir / "nested_cv_ml_folds.csv"
+    nested_cv_dl_path = run_results_dir / "nested_cv_dl_folds.csv"
+    nested_cv_params_path = run_results_dir / "nested_cv_best_params.csv"
+    ml_search_cv_results_path = run_results_dir / "ml_search_cv_results.csv"
+    model_details_path = run_results_dir / "model_details.json"
+    reports_dir = run_root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
 
     score_board = {
         "ML": _aggregate_model_score(ml_results),
@@ -1801,8 +2026,15 @@ def _save_run_artifacts(
         "best_model": best_model_name,
         "nested_cv": nested_cv_summary or {},
         "ml_tuning_mode": ml_tuning_mode,
+        "runtime_metadata": runtime_metadata or {},
+        "test_output_log": str(test_output_log_path) if test_output_log_path is not None else "",
+        "run_root": str(run_root),
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+
+    # Keep legacy timestamped summary for backward compatibility.
+    legacy_summary_path = legacy_results_dir / f"run_summary_{ts}.json"
+    legacy_summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
 
     pd.DataFrame(_flatten_metrics_for_csv(ml_results, model_name="ML")).to_csv(
         ml_metrics_path, index=False
@@ -1844,8 +2076,47 @@ def _save_run_artifacts(
         if isinstance(cv_results, pd.DataFrame) and not cv_results.empty:
             cv_results.to_csv(ml_search_cv_results_path, index=False)
 
+    full_metrics_payload = {
+        "ML": _to_json_safe(ml_results),
+        "DL": _to_json_safe(dl_results) if dl_results is not None else None,
+    }
+    full_metrics_json_path.write_text(
+        json.dumps(full_metrics_payload, indent=2),
+        encoding="utf-8",
+    )
+
+    model_details_payload = {
+        "selected_ml": selected_ml,
+        "selected_dl": selected_dl,
+        "best_model": best_model_name,
+        "score_board": score_board,
+        "selected_sources": selected_sources,
+    }
+    model_details_path.write_text(json.dumps(model_details_payload, indent=2), encoding="utf-8")
+
+    # Export detailed classification reports as plain text.
+    (reports_dir / "ml_species_classification_report.txt").write_text(
+        str(ml_results.get("species", {}).get("report", "")),
+        encoding="utf-8",
+    )
+    (reports_dir / "ml_phylum_classification_report.txt").write_text(
+        str(ml_results.get("phylum", {}).get("report", "")),
+        encoding="utf-8",
+    )
+    if dl_results is not None:
+        (reports_dir / "dl_species_classification_report.txt").write_text(
+            str(dl_results.get("species", {}).get("report", "")),
+            encoding="utf-8",
+        )
+        (reports_dir / "dl_phylum_classification_report.txt").write_text(
+            str(dl_results.get("phylum", {}).get("report", "")),
+            encoding="utf-8",
+        )
+
     return {
         "summary_json": str(summary_path),
+        "full_metrics_json": str(full_metrics_json_path),
+        "model_details_json": str(model_details_path),
         "ml_metrics_csv": str(ml_metrics_path),
         "dl_metrics_csv": str(dl_metrics_path) if dl_results is not None else "",
         "dl_history_csv": str(dl_history_path) if dl_history else "",
@@ -1853,6 +2124,7 @@ def _save_run_artifacts(
         "nested_cv_dl_csv": str(nested_cv_dl_path) if nested_cv_summary else "",
         "nested_cv_params_csv": str(nested_cv_params_path) if nested_cv_summary else "",
         "ml_search_cv_results_csv": str(ml_search_cv_results_path) if ml_search_results is not None else "",
+        "legacy_summary_json": str(legacy_summary_path),
     }
 
 
@@ -1871,6 +2143,35 @@ def _flatten_metrics_for_csv(results: dict[str, Any], model_name: str) -> list[d
         {"model": model_name, "metric": "best_assay_accuracy", "value": float(results["best_assay_accuracy"] )},
         {"model": model_name, "metric": "aggregate_score", "value": _aggregate_model_score(results)},
     ]
+
+    solvent_per_output = results.get("solvents", {}).get("per_output")
+    if isinstance(solvent_per_output, pd.DataFrame) and not solvent_per_output.empty:
+        for _, row in solvent_per_output.iterrows():
+            rows.append({
+                "model": model_name,
+                "metric": f"solvent_{row['name']}_mae",
+                "value": float(row["MAE"]),
+            })
+            rows.append({
+                "model": model_name,
+                "metric": f"solvent_{row['name']}_rmse",
+                "value": float(row["RMSE"]),
+            })
+
+    assay_per_output = results.get("assays", {}).get("per_output")
+    if isinstance(assay_per_output, pd.DataFrame) and not assay_per_output.empty:
+        for _, row in assay_per_output.iterrows():
+            rows.append({
+                "model": model_name,
+                "metric": f"assay_{row['name']}_mae",
+                "value": float(row["MAE"]),
+            })
+            rows.append({
+                "model": model_name,
+                "metric": f"assay_{row['name']}_rmse",
+                "value": float(row["RMSE"]),
+            })
+
     return rows
 
 
@@ -1895,14 +2196,14 @@ def _print_source_combination_guide() -> None:
   │  Test 1: FTIR Only                                                   │
   │    Run interactively and select: FTIR                                │
   │    Expected: FTIR spectra visualization + model trained on FTIR      │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 02b_ftir_spectra.png                                    │
   │              08a_confusion_species_ml[FTIR].png                      │
   │                                                                       │
   │  Test 2: HPLC Only                                                   │
   │    Run interactively and select: HPLC                                │
   │    Expected: HPLC chromatogram + assay/solvent analysis + HPLC model │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 01_hplc_chromatograms.png                               │
   │              03_assay_heatmap.png (HPLC-only)                        │
   │              08a_confusion_species_ml[HPLC].png                      │
@@ -1910,7 +2211,7 @@ def _print_source_combination_guide() -> None:
   │  Test 3: GCMS Only                                                   │
   │    Run interactively and select: GCMS                                │
   │    Expected: GC-MS spectrum + model trained on GCMS                  │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 02_gcms_spectra.png                                     │
   │              08a_confusion_species_ml[GCMS].png                      │
   │                                                                       │
@@ -1923,7 +2224,7 @@ def _print_source_combination_guide() -> None:
   │  Test 4: FTIR + HPLC                                                │
   │    Run interactively and select: FTIR, HPLC                          │
   │    Expected: Both spectra + combined analysis                        │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 02b_ftir_spectra.png                                    │
   │              01_hplc_chromatograms.png                               │
   │              08a_confusion_species_ml[FTIR + HPLC].png               │
@@ -1931,7 +2232,7 @@ def _print_source_combination_guide() -> None:
   │  Test 5: FTIR + GCMS                                                │
   │    Run interactively and select: FTIR, GCMS                          │
   │    Expected: Both spectra + combined analysis                        │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 02b_ftir_spectra.png                                    │
   │              02_gcms_spectra.png                                     │
   │              08a_confusion_species_ml[FTIR + GCMS].png               │
@@ -1939,7 +2240,7 @@ def _print_source_combination_guide() -> None:
   │  Test 6: HPLC + GCMS (Traditional)                                  │
   │    Run interactively and select: HPLC, GCMS                          │
   │    Expected: Full analysis (HPLC + GC-MS + all metadata)            │
-  │    Output folder: HPLC_GCMS_Fingerprint/figures/                    │
+    │    Output folder: per-run artifact `run_root/graphs/` (or use --figures-dir) │
   │    Look for: 01_hplc_chromatograms.png                               │
   │              02_gcms_spectra.png                                     │
   │              03_assay_heatmap.png                                    │

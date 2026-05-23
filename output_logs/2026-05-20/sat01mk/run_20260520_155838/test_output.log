@@ -1,0 +1,106 @@
+
+================================================================================
+
+================================================================================
+  RUN ARTIFACT INITIALIZATION
+  RUN ARTIFACT INITIALIZATION
+================================================================================
+================================================================================
+  Runner       : sat01mk
+  Runner       : sat01mk
+  Run ID       : 20260520_155838
+  Run ID       : 20260520_155838
+  Run folder   : C:\Data_Science_AI\output_logs\2026-05-20\sat01mk\run_20260520_155838
+  Run folder   : C:\Data_Science_AI\output_logs\2026-05-20\sat01mk\run_20260520_155838
+  Output log   : C:\Data_Science_AI\output_logs\2026-05-20\sat01mk\run_20260520_155838\test_output.log
+  Output log   : C:\Data_Science_AI\output_logs\2026-05-20\sat01mk\run_20260520_155838\test_output.log
+================================================================================
+
+================================================================================
+
+
+============================================================
+
+============================================================
+  Step 0 – Data Mode Selection
+  Step 0 – Data Mode Selection
+============================================================
+============================================================
+
+======================================================================
+
+======================================================================
+  DATA MODE SELECTION
+  DATA MODE SELECTION
+======================================================================
+======================================================================
+
+Choose data mode:
+
+Choose data mode:
+  [1] DUMMY  - Generate synthetic data for testing
+  [1] DUMMY  - Generate synthetic data for testing
+  [2] REAL   - Load actual data from files
+  [2] REAL   - Load actual data from files
+
+Enter choice (1 or 2): 
+Enter choice (1 or 2): 
+======================================================================
+
+======================================================================
+  MULTI-SOURCE DATA PIPELINE FOR ALGAE SPECIES IDENTIFICATION
+  MULTI-SOURCE DATA PIPELINE FOR ALGAE SPECIES IDENTIFICATION
+======================================================================
+======================================================================
+
+Available Data Sources:
+
+Available Data Sources:
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+
+  1. FTIR
+
+  1. FTIR
+     → Fourier-Transform Infrared Spectroscopy
+     → Fourier-Transform Infrared Spectroscopy
+     → File formats: .csv, .xlsx
+     → File formats: .csv, .xlsx
+
+  2. HPLC
+
+  2. HPLC
+     → High-Performance Liquid Chromatography
+     → High-Performance Liquid Chromatography
+     → File formats: .csv, .xlsx
+     → File formats: .csv, .xlsx
+
+  3. GCMS
+
+  3. GCMS
+     → Gas Chromatography - Mass Spectrometry
+     → Gas Chromatography - Mass Spectrometry
+     → File formats: .csv, .xlsx
+     → File formats: .csv, .xlsx
+
+----------------------------------------------------------------------
+
+----------------------------------------------------------------------
+SELECT DATA SOURCES
+SELECT DATA SOURCES
+----------------------------------------------------------------------
+----------------------------------------------------------------------
+
+Enter the numbers of sources you want to use (comma-separated):
+
+Enter the numbers of sources you want to use (comma-separated):
+Examples:
+Examples:
+  • '1' → FTIR only
+  • '1' → FTIR only
+  • '2,3' → HPLC and GC-MS
+  • '2,3' → HPLC and GC-MS
+  • '1,2,3' → All three sources
+  • '1,2,3' → All three sources
+
+Your choice: 
