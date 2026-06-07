@@ -181,19 +181,51 @@ class MLMultiTaskBaseline:
         phylum: np.ndarray,
         y_solvents: np.ndarray,
         y_assays: np.ndarray,
+        progress_callback: callable | None = None,
+        verbose: bool = True,
     ) -> "MLMultiTaskBaseline":
         """Train all four heads."""
-        print(f"[ML] Training species classifier ({self.clf_type}) …")
+        if progress_callback is not None:
+            try:
+                progress_callback(0.0, {"stage": "ml_start", "message": "Training species classifier"})
+            except Exception:
+                pass
+
+        if verbose:
+            print(f"[ML] Training species classifier ({self.clf_type}) …")
         self.head_species.fit(X, species)
+        if progress_callback is not None:
+            try:
+                progress_callback(25.0, {"stage": "ml_species_complete", "message": "Species classifier complete"})
+            except Exception:
+                pass
 
-        print(f"[ML] Training phylum classifier ({self.clf_type}) …")
+        if verbose:
+            print(f"[ML] Training phylum classifier ({self.clf_type}) …")
         self.head_phylum.fit(X, phylum)
+        if progress_callback is not None:
+            try:
+                progress_callback(50.0, {"stage": "ml_phylum_complete", "message": "Phylum classifier complete"})
+            except Exception:
+                pass
 
-        print(f"[ML] Training solvent-activity regressor ({self.reg_type}) …")
+        if verbose:
+            print(f"[ML] Training solvent-activity regressor ({self.reg_type}) …")
         self.head_solvents.fit(X, y_solvents)
+        if progress_callback is not None:
+            try:
+                progress_callback(75.0, {"stage": "ml_solvents_complete", "message": "Solvent regressor complete"})
+            except Exception:
+                pass
 
-        print(f"[ML] Training assay-performance regressor ({self.reg_type}) …")
+        if verbose:
+            print(f"[ML] Training assay-performance regressor ({self.reg_type}) …")
         self.head_assays.fit(X, y_assays)
+        if progress_callback is not None:
+            try:
+                progress_callback(100.0, {"stage": "ml_assays_complete", "message": "Assay regressor complete"})
+            except Exception:
+                pass
 
         return self
 

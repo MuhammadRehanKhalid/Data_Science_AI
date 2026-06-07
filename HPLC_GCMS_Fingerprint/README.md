@@ -73,6 +73,18 @@ cd HPLC_GCMS_Fingerprint
 python run_pipeline.py
 ```
 
+For the terminal step navigator with back / next / status / exit, run:
+
+```bash
+python enhanced_pipeline.py
+```
+
+If you want the launcher entry point used by the repo, run:
+
+```bash
+python pipeline_launcher.py
+```
+
 ### 3 · Common options
 
 | Flag | Default | Description |
@@ -83,6 +95,36 @@ python run_pipeline.py
 | `--batch-size N` | 16 | DL mini-batch size |
 | `--skip-dl` | off | Skip PyTorch training, run ML baseline only |
 | `--output PATH` | `data/fingerprint_data.xlsx` | Excel workbook path |
+| `--training-display` | `verbose` | Show full training logs or compact progress updates |
+
+### GUI Launcher
+-----------
+A lightweight Tkinter GUI is available for terminal-style runs that streams console output into a window. Launch it with:
+
+```bash
+python pipeline_gui.py
+```
+
+Options in the GUI:
+- Choose `Verbose` or `Progress` training display.
+- Provide per-step overrides (example: `5:progress,6:verbose`).
+
+Per-step training display
+-------------------------
+The pipeline supports a global training display mode and per-step overrides. Use the CLI options:
+
+```bash
+# Global compact progress bars for training
+python run_pipeline.py --training-display progress
+
+# Override step 5 (ML) and step 6 (DL) individually
+python run_pipeline.py --step-display "5:progress,6:verbose"
+```
+
+Notes:
+- Step numbers correspond to the pipeline steps printed at runtime (ML baseline is step 5, DL training is step 6).
+- `--step-display` overrides the global `--training-display` for the specified steps.
+Use `--training-display progress` if you want compact percentage-style training feedback instead of step-by-step model log lines.
 
 Example – larger dataset, longer DL training:
 
@@ -98,8 +140,7 @@ If you want a Windows `.exe` for the pipeline, build it from the repository root
 .\build_pipeline_exe.ps1
 ```
 
-The packaged app will be created in `dist\HPLC_GCMS_Pipeline\HPLC_GCMS_Pipeline.exe`.
-It opens a desktop GUI that launches the pipeline and shows the live console log.
+The terminal step navigator is the console path for step-by-step control. Use `run_pipeline.py` for the full ML/DL pipeline and `enhanced_pipeline.py` for the back / next / status / exit menu.
 
 ### Data Layout Help
 

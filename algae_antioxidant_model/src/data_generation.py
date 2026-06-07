@@ -71,7 +71,7 @@ def generate_data():
     )
 
     print(
-        f"\n📊 Generated {N_SAMPLES} samples with ORAC range: [{df['ORAC'].min():.1f}, {df['ORAC'].max():.1f}]"
+        f"\nGenerated {N_SAMPLES} samples with ORAC range: [{df['ORAC'].min():.1f}, {df['ORAC'].max():.1f}]"
     )
 
     return df

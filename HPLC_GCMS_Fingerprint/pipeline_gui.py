@@ -1,306 +1,206 @@
+"""Simple Tkinter GUI to launch the pipeline and view terminal output.
+
+This lightweight launcher runs `run_pipeline.py` in a subprocess and streams
+stdout/stderr into a text widget. It also exposes `--training-display` and
+`--step-display` options so you can select compact progress or verbose logs.
+
+Usage: python pipeline_gui.py
+"""
 from __future__ import annotations
 
-import builtins
-import contextlib
-import io
-import os
-import queue
-import sys
 import threading
-import traceback
+import subprocess
+import sys
+import shlex
+import re
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk
 
 
-def _project_root() -> Path:
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent
 
 
-PROJECT_ROOT = _project_root()
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-os.chdir(PROJECT_ROOT)
-
-import run_pipeline
-
-
-class QueueWriter:
-    def __init__(self, output_queue: queue.Queue[str]):
-        self.output_queue = output_queue
-
-    def write(self, text: str) -> int:
-        if text:
-            self.output_queue.put(text)
-        return len(text)
-
-    def flush(self) -> None:
-        return None
-
-
-class PipelineGui(tk.Tk):
-    def __init__(self) -> None:
+class PipelineGUI(tk.Tk):
+    def __init__(self):
         super().__init__()
-        self.title('HPLC / GC-MS Pipeline Launcher')
-        self.geometry('1080x760')
-        self.minsize(960, 680)
+        self.title("HPLC_GCMS_Fingerprint — Pipeline GUI")
+        self.geometry("900x600")
 
-        self.output_queue: queue.Queue[str | tuple[str, str]] = queue.Queue()
-        self.worker_thread: threading.Thread | None = None
-        self.pipeline_running = False
+        frm = ttk.Frame(self)
+        frm.pack(fill=tk.X, padx=8, pady=6)
 
-        self.data_mode = tk.StringVar(value='dummy')
-        self.skip_dl = tk.BooleanVar(value=False)
-        self.validate_species = tk.BooleanVar(value=False)
-        self.ftir = tk.BooleanVar(value=True)
-        self.hplc = tk.BooleanVar(value=True)
-        self.gcms = tk.BooleanVar(value=True)
-        self.reps = tk.StringVar(value='15')
-        self.epochs = tk.StringVar(value='200')
-        self.batch_size = tk.StringVar(value='16')
+        ttk.Label(frm, text="Training display:").pack(side=tk.LEFT)
+        self.display_var = tk.StringVar(value="verbose")
+        ttk.Radiobutton(frm, text="Verbose", value="verbose", variable=self.display_var).pack(side=tk.LEFT)
+        ttk.Radiobutton(frm, text="Progress", value="progress", variable=self.display_var).pack(side=tk.LEFT)
 
-        self._build_ui()
-        self._poll_queue()
+        ttk.Label(frm, text="  Step overrides:").pack(side=tk.LEFT, padx=(10,0))
+        self.step_override = tk.StringVar(value="")
+        ttk.Entry(frm, textvariable=self.step_override, width=24).pack(side=tk.LEFT)
+        ttk.Label(frm, text=" e.g. 5:progress,6:verbose").pack(side=tk.LEFT)
 
-    def _build_ui(self) -> None:
-        self.configure(bg='#0c1118')
+        # Non-interactive options
+        ttk.Label(frm, text="   Data mode:").pack(side=tk.LEFT, padx=(10,0))
+        self.data_mode = tk.StringVar(value="")
+        ttk.Combobox(frm, textvariable=self.data_mode, values=("", "dummy", "real"), width=8).pack(side=tk.LEFT)
 
-        style = ttk.Style(self)
-        style.theme_use('clam')
-        style.configure('Root.TFrame', background='#0c1118')
-        style.configure('Card.TFrame', background='#111826', relief='flat')
-        style.configure('Header.TLabel', background='#0c1118', foreground='#f5f7fb', font=('Segoe UI', 20, 'bold'))
-        style.configure('Subtle.TLabel', background='#0c1118', foreground='#9fb0c8', font=('Segoe UI', 10))
-        style.configure('CardTitle.TLabel', background='#111826', foreground='#f5f7fb', font=('Segoe UI', 12, 'bold'))
-        style.configure('CardText.TLabel', background='#111826', foreground='#c6d0e0', font=('Segoe UI', 10))
-        style.configure('TCheckbutton', background='#111826', foreground='#d7deea', font=('Segoe UI', 10))
-        style.configure('TRadiobutton', background='#111826', foreground='#d7deea', font=('Segoe UI', 10))
-        style.configure('TButton', font=('Segoe UI', 10, 'bold'), padding=(14, 8))
+        ttk.Label(frm, text=" Sources:").pack(side=tk.LEFT, padx=(6,0))
+        self.sources = tk.StringVar(value="")
+        ttk.Entry(frm, textvariable=self.sources, width=20).pack(side=tk.LEFT)
+        ttk.Label(frm, text=" e.g. HPLC,GCMS").pack(side=tk.LEFT)
 
-        outer = ttk.Frame(self, style='Root.TFrame', padding=18)
-        outer.pack(fill='both', expand=True)
+        self.add_biodata_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Add biodata", variable=self.add_biodata_var).pack(side=tk.LEFT, padx=(8,0))
 
-        header = ttk.Frame(outer, style='Root.TFrame')
-        header.pack(fill='x', pady=(0, 14))
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=8, pady=(0,6))
 
-        ttk.Label(header, text='HPLC / GC-MS Pipeline Launcher', style='Header.TLabel').pack(anchor='w')
-        ttk.Label(
-            header,
-            text='Runs the pipeline as a desktop app with a live console log. Dummy mode is automated; real-data input stays console-driven.',
-            style='Subtle.TLabel',
-        ).pack(anchor='w', pady=(6, 0))
+        self.run_btn = ttk.Button(btn_frame, text="Run", command=self.start_run)
+        self.run_btn.pack(side=tk.LEFT)
+        self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop_run, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_frame, text="Clear", command=self.clear_output).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Exit", command=self.on_exit).pack(side=tk.RIGHT)
 
-        content = ttk.Frame(outer, style='Root.TFrame')
-        content.pack(fill='both', expand=True)
-        content.columnconfigure(0, weight=1)
-        content.columnconfigure(1, weight=1)
-        content.rowconfigure(1, weight=1)
+        # Output text
+        self.output = tk.Text(self, wrap=tk.NONE)
+        self.output.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        left = ttk.Frame(content, style='Card.TFrame', padding=16)
-        left.grid(row=0, column=0, rowspan=2, sticky='nsew', padx=(0, 10))
+        # Progress and status
+        status_frame = ttk.Frame(self)
+        status_frame.pack(fill=tk.X, padx=8, pady=(0,6))
+        ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT)
+        self.status_var = tk.StringVar(value="Idle")
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_var)
+        self.status_label.pack(side=tk.LEFT, padx=(4,20))
 
-        right = ttk.Frame(content, style='Card.TFrame', padding=16)
-        right.grid(row=0, column=1, rowspan=2, sticky='nsew', padx=(10, 0))
-        right.rowconfigure(2, weight=1)
-        right.columnconfigure(0, weight=1)
+        ttk.Label(status_frame, text="Progress:").pack(side=tk.LEFT)
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress_bar = ttk.Progressbar(status_frame, orient=tk.HORIZONTAL, length=240, mode="determinate", variable=self.progress_var, maximum=100.0)
+        self.progress_bar.pack(side=tk.LEFT, padx=(4,0))
 
-        ttk.Label(left, text='Run Settings', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(left, text='Choose a dummy-mode run profile for the packaged pipeline.', style='CardText.TLabel').pack(anchor='w', pady=(4, 14))
+        # Internal
+        self.proc = None
+        self._thread = None
 
-        mode_box = ttk.Frame(left, style='Card.TFrame')
-        mode_box.pack(fill='x', pady=(0, 12))
-        ttk.Label(mode_box, text='Data mode', style='CardText.TLabel').pack(anchor='w')
-        ttk.Radiobutton(mode_box, text='Dummy data', value='dummy', variable=self.data_mode).pack(anchor='w', pady=(4, 0))
-        ttk.Radiobutton(mode_box, text='Real data', value='real', variable=self.data_mode).pack(anchor='w')
-        ttk.Label(mode_box, text='Real data mode is not automated in this launcher yet.', style='CardText.TLabel').pack(anchor='w', pady=(4, 0))
-
-        source_box = ttk.Frame(left, style='Card.TFrame')
-        source_box.pack(fill='x', pady=(0, 12))
-        ttk.Label(source_box, text='Sources', style='CardText.TLabel').pack(anchor='w')
-        ttk.Checkbutton(source_box, text='FTIR', variable=self.ftir).pack(anchor='w', pady=(4, 0))
-        ttk.Checkbutton(source_box, text='HPLC', variable=self.hplc).pack(anchor='w')
-        ttk.Checkbutton(source_box, text='GCMS', variable=self.gcms).pack(anchor='w')
-
-        tune_box = ttk.Frame(left, style='Card.TFrame')
-        tune_box.pack(fill='x', pady=(0, 12))
-        ttk.Label(tune_box, text='Pipeline options', style='CardText.TLabel').pack(anchor='w')
-        ttk.Checkbutton(tune_box, text='Skip DL model', variable=self.skip_dl).pack(anchor='w', pady=(4, 0))
-        ttk.Checkbutton(tune_box, text='Validate species names', variable=self.validate_species).pack(anchor='w')
-
-        numeric_box = ttk.Frame(left, style='Card.TFrame')
-        numeric_box.pack(fill='x', pady=(0, 12))
-        ttk.Label(numeric_box, text='Replicates', style='CardText.TLabel').grid(row=0, column=0, sticky='w', padx=(0, 8), pady=(0, 8))
-        ttk.Entry(numeric_box, textvariable=self.reps, width=12).grid(row=0, column=1, sticky='w', pady=(0, 8))
-        ttk.Label(numeric_box, text='Epochs', style='CardText.TLabel').grid(row=1, column=0, sticky='w', padx=(0, 8), pady=(0, 8))
-        ttk.Entry(numeric_box, textvariable=self.epochs, width=12).grid(row=1, column=1, sticky='w', pady=(0, 8))
-        ttk.Label(numeric_box, text='Batch size', style='CardText.TLabel').grid(row=2, column=0, sticky='w', padx=(0, 8))
-        ttk.Entry(numeric_box, textvariable=self.batch_size, width=12).grid(row=2, column=1, sticky='w')
-
-        button_row = ttk.Frame(left, style='Card.TFrame')
-        button_row.pack(fill='x', pady=(6, 0))
-        self.start_button = ttk.Button(button_row, text='Run pipeline', command=self._start_pipeline)
-        self.start_button.pack(side='left')
-        ttk.Button(button_row, text='Clear log', command=self._clear_log).pack(side='left', padx=(10, 0))
-
-        status_row = ttk.Frame(left, style='Card.TFrame')
-        status_row.pack(fill='x', pady=(16, 0))
-        ttk.Label(status_row, text='Status', style='CardText.TLabel').pack(anchor='w')
-        self.status_label = ttk.Label(status_row, text='Idle', style='CardText.TLabel')
-        self.status_label.pack(anchor='w', pady=(4, 0))
-
-        log_header = ttk.Frame(right, style='Card.TFrame')
-        log_header.grid(row=0, column=0, sticky='ew')
-        ttk.Label(log_header, text='Live Output', style='CardTitle.TLabel').pack(anchor='w')
-        ttk.Label(log_header, text='This captures the console output from the pipeline run.', style='CardText.TLabel').pack(anchor='w', pady=(4, 12))
-
-        self.log_text = scrolledtext.ScrolledText(
-            right,
-            wrap='word',
-            height=30,
-            bg='#081018',
-            fg='#dbe7ff',
-            insertbackground='#dbe7ff',
-            relief='flat',
-            padx=12,
-            pady=12,
-            font=('Consolas', 10),
-        )
-        self.log_text.grid(row=1, column=0, sticky='nsew')
-
-        footer = ttk.Frame(right, style='Card.TFrame')
-        footer.grid(row=2, column=0, sticky='ew', pady=(12, 0))
-        ttk.Label(footer, text='The packaged exe will live in dist\\HPLC_GCMS_Pipeline\\HPLC_GCMS_Pipeline.exe after build.', style='CardText.TLabel').pack(anchor='w')
-
-    def _clear_log(self) -> None:
-        self.log_text.delete('1.0', 'end')
-
-    def _append_log(self, text: str) -> None:
-        self.log_text.insert('end', text)
-        self.log_text.see('end')
-
-    def _set_status(self, text: str) -> None:
-        self.status_label.configure(text=text)
-
-    def _build_args(self) -> list[str]:
-        args = [
-            '--reps', self.reps.get().strip() or '15',
-            '--epochs', self.epochs.get().strip() or '200',
-            '--batch-size', self.batch_size.get().strip() or '16',
-            '--skip-optimization',
-        ]
-
-        if self.skip_dl.get():
-            args.append('--skip-dl')
-        if self.validate_species.get():
-            args.append('--validate-species')
-
-        return args
-
-    def _build_input_script(self) -> list[str]:
-        if self.data_mode.get() != 'dummy':
-            raise ValueError('This launcher currently automates dummy mode only.')
-
-        sources = []
-        if self.ftir.get():
-            sources.append('1')
-        if self.hplc.get():
-            sources.append('2')
-        if self.gcms.get():
-            sources.append('3')
-
-        if not sources:
-            raise ValueError('Select at least one data source.')
-
-        return ['1', ','.join(sources), 'n']
-
-    def _start_pipeline(self) -> None:
-        if self.pipeline_running:
+    def start_run(self):
+        if self.proc is not None:
             return
+        display = self.display_var.get()
+        step = self.step_override.get().strip()
+        cmd = [sys.executable, str(ROOT / "run_pipeline.py")]
+        cmd += ["--training-display", display]
+        # Non-interactive flags
+        dm = self.data_mode.get().strip()
+        if dm:
+            cmd += ["--data-mode", dm]
+        srcs = self.sources.get().strip()
+        if srcs:
+            cmd += ["--selected-sources", srcs]
+        if self.add_biodata_var.get():
+            cmd += ["--add-biodata"]
+        if step:
+            cmd += ["--step-display", step]
 
-        try:
-            input_script = self._build_input_script()
-        except ValueError as exc:
-            messagebox.showerror('Invalid selection', str(exc))
-            return
+        self.append_output(f"> Running: {' '.join(shlex.quote(c) for c in cmd)}\n\n")
+        self.set_status("Running")
+        self.set_progress(0.0)
 
-        self.pipeline_running = True
-        self.start_button.configure(state='disabled')
-        self._set_status('Running')
-        self._append_log('\n=== Starting pipeline ===\n')
-        self._append_log(f'Working directory: {PROJECT_ROOT}\n')
-        self._append_log(f'Arguments: {" ".join(self._build_args())}\n')
-        self._append_log(f'Inputs: {input_script}\n\n')
-
-        self.worker_thread = threading.Thread(
-            target=self._run_pipeline_worker,
-            args=(input_script,),
-            daemon=True,
-        )
-        self.worker_thread.start()
-
-    def _run_pipeline_worker(self, scripted_inputs: list[str]) -> None:
-        output_buffer = io.StringIO()
-        prompts = iter(scripted_inputs)
-
-        original_input = builtins.input
-        original_argv = sys.argv[:]
-
-        def scripted_input(prompt: str = '') -> str:
-            if prompt:
-                self.output_queue.put(prompt)
+        # Start subprocess in background thread
+        def _run():
             try:
-                answer = next(prompts)
-            except StopIteration as exc:
-                raise RuntimeError('The pipeline requested more input than the GUI provided.') from exc
-            self.output_queue.put(f'{answer}\n')
-            return answer
+                self.proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    bufsize=1,
+                )
+                self.run_btn.config(state=tk.DISABLED)
+                self.stop_btn.config(state=tk.NORMAL)
 
+                for line in self.proc.stdout:
+                    self.append_output(line)
+                    # Try to parse a percent like '42.50%' from the line
+                    m = re.search(r"(\d+(?:\.\d+)?)%", line)
+                    if m:
+                        try:
+                            pct = float(m.group(1))
+                            self.set_progress(pct)
+                        except Exception:
+                            pass
+
+                self.proc.wait()
+                rc = self.proc.returncode
+                self.append_output(f"\nProcess exited with return code {rc}\n")
+                if rc == 0:
+                    self.set_status("Completed")
+                    self.set_progress(100.0)
+                else:
+                    self.set_status("Failed")
+
+            except Exception as e:
+                self.append_output(f"[ERROR] {e}\n")
+            finally:
+                self.proc = None
+                self.run_btn.config(state=tk.NORMAL)
+                self.stop_btn.config(state=tk.DISABLED)
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def stop_run(self):
+        if self.proc is None:
+            return
         try:
-            builtins.input = scripted_input
-            sys.argv = ['run_pipeline.py', *self._build_args()]
-            with contextlib.redirect_stdout(QueueWriter(self.output_queue)), contextlib.redirect_stderr(QueueWriter(self.output_queue)):
-                output_buffer.write('')
-                run_pipeline.main()
-            self.output_queue.put('\n=== Pipeline finished successfully ===\n')
-            self.output_queue.put(('status', 'Finished'))
-        except SystemExit as exc:
-            self.output_queue.put(f'\n=== Pipeline exited with code {exc.code} ===\n')
-            self.output_queue.put(('status', f'Exited: {exc.code}'))
+            self.proc.terminate()
+            self.append_output("\n[Stopping process]\n")
+        except Exception as e:
+            self.append_output(f"[ERROR stopping] {e}\n")
+
+    def append_output(self, text: str):
+        # Thread-safe append
+        def _append():
+            self.output.insert(tk.END, text)
+            self.output.see(tk.END)
+        try:
+            self.output.after(0, _append)
         except Exception:
-            self.output_queue.put('\n=== Pipeline failed ===\n')
-            self.output_queue.put(traceback.format_exc())
-            self.output_queue.put(('status', 'Failed'))
-        finally:
-            builtins.input = original_input
-            sys.argv = original_argv
-            self.output_queue.put(('done', ''))
-
-    def _poll_queue(self) -> None:
-        try:
-            while True:
-                item = self.output_queue.get_nowait()
-                if isinstance(item, tuple):
-                    tag, value = item
-                    if tag == 'status':
-                        self._set_status(value)
-                    elif tag == 'done':
-                        self.pipeline_running = False
-                        self.start_button.configure(state='normal')
-                    continue
-                self._append_log(item)
-        except queue.Empty:
             pass
-        self.after(60, self._poll_queue)
+
+    def set_progress(self, pct: float):
+        def _set():
+            try:
+                self.progress_var.set(max(0.0, min(100.0, float(pct))))
+            except Exception:
+                self.progress_var.set(0.0)
+        try:
+            self.progress_bar.after(0, _set)
+        except Exception:
+            pass
+
+    def set_status(self, text: str):
+        def _set():
+            self.status_var.set(text)
+        try:
+            self.status_label.after(0, _set)
+        except Exception:
+            pass
+
+    def clear_output(self):
+        self.output.delete("1.0", tk.END)
+
+    def on_exit(self):
+        if self.proc is not None:
+            try:
+                self.proc.terminate()
+            except Exception:
+                pass
+        self.destroy()
 
 
-def main() -> None:
-    app = PipelineGui()
+if __name__ == "__main__":
+    app = PipelineGUI()
     app.mainloop()
-
-
-if __name__ == '__main__':
-    main()

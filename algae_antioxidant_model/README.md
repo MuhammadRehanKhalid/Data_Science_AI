@@ -13,6 +13,8 @@ Scaffolded project layout for data prep, modeling, evaluation, and plots.
 1. Install dependencies.
 2. Run the pipeline:
    - `python run_pipeline.py`
+3. Open the button-based UI:
+   - `python pipeline_gui.py`
 
 <!-- This scaffold generates a small placeholder dataset to validate the pipeline.
 algae_antioxidant_model/

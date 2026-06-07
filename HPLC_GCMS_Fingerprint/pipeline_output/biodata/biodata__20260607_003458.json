@@ -1,0 +1,48 @@
+{
+  "experiment_metadata": {
+    "experiment_id": "",
+    "date": "2026-06-07",
+    "researcher_name": "",
+    "institution": "",
+    "objectives": "",
+    "notes": ""
+  },
+  "growth_conditions": {
+    "temperature_celsius": null,
+    "ph": null,
+    "light_intensity_umol": null,
+    "light_duration_hours": null,
+    "photoperiod": "",
+    "agitation_rpm": null,
+    "culture_volume_ml": null,
+    "cultivation_days": null,
+    "cultivation_type": ""
+  },
+  "medium_and_nutrients": {
+    "medium_type": "",
+    "nitrogen_source": "",
+    "phosphorus_source": "",
+    "carbon_source": "",
+    "vitamin_supplementation": "",
+    "mineral_enrichment": ""
+  },
+  "environmental_conditions": {
+    "aeration": "",
+    "co2_percentage": null,
+    "humidity_if_applicable": null,
+    "contamination_assessment": "",
+    "sterility_method": ""
+  },
+  "samples": [
+    {
+      "sample_id": "",
+      "species_name": "",
+      "collection_day": null,
+      "cell_density_od": null,
+      "cell_density_cells_ml": null,
+      "viability_percent": null,
+      "extraction_method": "",
+      "extraction_solvent": ""
+    }
+  ]
+}

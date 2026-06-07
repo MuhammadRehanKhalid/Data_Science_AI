@@ -1,0 +1,32 @@
+
+================================================================================
+  RUN ARTIFACT INITIALIZATION
+================================================================================
+  Runner       : mirza
+  Run ID       : 20260607_004252
+  Run folder   : D:\04_L1_Python_Programming\Data_Science_Ammar\output_logs\2026-06-07\mirza\run_20260607_004252
+  Output log   : D:\04_L1_Python_Programming\Data_Science_Ammar\output_logs\2026-06-07\mirza\run_20260607_004252\test_output.log
+================================================================================
+
+
+============================================================
+  Step 0 – Data Mode Selection
+============================================================
+
+======================================================================
+  DATA MODE SELECTION
+======================================================================
+
+Choose data mode:
+  [1] DUMMY  - Generate synthetic data for testing
+  [2] REAL   - Load actual data from files
+
+Enter choice (1 or 2): 
+======================================================================
+  MULTI-SOURCE DATA PIPELINE FOR ALGAE SPECIES IDENTIFICATION
+======================================================================
+
+Available Data Sources:
+----------------------------------------------------------------------
+
+  1. FTIR

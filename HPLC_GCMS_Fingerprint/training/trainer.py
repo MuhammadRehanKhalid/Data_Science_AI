@@ -35,6 +35,7 @@ def train_ml(
     n_estimators_reg: int = 200,
     random_state: int = 42,
     progress_callback: callable | None = None,
+    verbose: bool = True,
 ) -> MLMultiTaskBaseline:
     """
     Fit the ML multi-task baseline on training data.
@@ -61,6 +62,8 @@ def train_ml(
         phylum     = train_ds.phylum,
         y_solvents = train_ds.y_solvents,
         y_assays   = train_ds.y_assays,
+        progress_callback=progress_callback,
+        verbose=verbose,
     )
     # Report final progress if requested
     if progress_callback is not None:
@@ -97,6 +100,7 @@ def train_dl(
     random_state: int = 42,
     device: Optional[str] = None,
     progress_callback: callable | None = None,
+    verbose: bool = True,
 ) -> "tuple[MultiTaskDLModel, list[dict]]":
     """
     Train the PyTorch multi-task model.
@@ -138,7 +142,8 @@ def train_dl(
     else:
         device_obj = torch.device(device)
 
-    print(f"[DL] Training on device: {device_obj}")
+    if verbose:
+        print(f"[DL] Training on device: {device_obj}")
 
     # Build model
     model = MultiTaskDLModel(
@@ -232,7 +237,7 @@ def train_dl(
         else:
             epochs_no_improve += 1
 
-        if epoch % 20 == 0 or epoch == 1:
+        if verbose and (epoch % 20 == 0 or epoch == 1):
             print(
                 f"  Epoch {epoch:3d}/{epochs}  "
                 f"train_total={epoch_losses['total']:.4f}  "
@@ -240,12 +245,14 @@ def train_dl(
             )
 
         if epochs_no_improve >= patience:
-            print(f"  Early stopping at epoch {epoch} (patience={patience}).")
+            if verbose:
+                print(f"  Early stopping at epoch {epoch} (patience={patience}).")
             break
 
     # Restore best weights
     if best_state is not None:
         model.load_state_dict({k: v.to(device_obj) for k, v in best_state.items()})
 
-    print(f"[DL] Training complete. Best val loss: {best_val_loss:.4f}")
+    if verbose:
+        print(f"[DL] Training complete. Best val loss: {best_val_loss:.4f}")
     return model, history

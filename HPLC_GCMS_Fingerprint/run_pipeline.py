@@ -40,6 +40,7 @@ Usage Examples
     python run_pipeline.py --figures-dir figures    # custom figure output dir
     python run_pipeline.py --figure-format jpg      # export figures as JPEG
     python run_pipeline.py --figure-format pdf      # export figures as PDF
+    python run_pipeline.py --training-display progress  # compact progress bar
     python run_pipeline.py --recommend-model        # print model selection guidance
     python run_pipeline.py --ml-clf svm             # use SVM classifier
     python run_pipeline.py --ml-reg ridge           # use Ridge regressor
@@ -159,6 +160,34 @@ def parse_args() -> argparse.Namespace:
         help="DL mini-batch size.",
     )
     p.add_argument(
+        "--training-display", type=str, default="verbose",
+        choices=["verbose", "progress"],
+        help=(
+            "Show full training logs or compact progress updates for ML/DL steps. "
+            "Default: verbose."
+        ),
+    )
+    p.add_argument(
+        "--step-display", type=str, default=None,
+        help=(
+            "Per-step display overrides in the form '5:progress,6:verbose' where "
+            "the number is the pipeline step (5=ML,6=DL). Overrides global --training-display."
+        ),
+    )
+    p.add_argument(
+        "--data-mode", type=str, default=None,
+        choices=["dummy", "real"],
+        help="Non-interactive data mode: 'dummy' or 'real'. If omitted, prompts interactively.",
+    )
+    p.add_argument(
+        "--selected-sources", type=str, default=None,
+        help="Comma-separated selected sources (e.g. HPLC,GCMS,FTIR). If provided, source selection is non-interactive.",
+    )
+    p.add_argument(
+        "--add-biodata", action="store_true",
+        help="When set, collect biodata non-interactively where possible (skips prompts).",
+    )
+    p.add_argument(
         "--skip-dl", action="store_true",
         help="Skip the PyTorch DL model (ML baseline only).",
     )
@@ -274,6 +303,38 @@ def _safe_slug(value: str, fallback: str = "unknown") -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value.strip())
     cleaned = cleaned.strip("_")
     return cleaned or fallback
+
+
+def _format_progress_bar(percent: float, width: int = 24) -> str:
+    pct = max(0.0, min(100.0, float(percent)))
+    filled = int(round((pct / 100.0) * width))
+    filled = max(0, min(width, filled))
+    return f"[{('#' * filled).ljust(width, '.')}] {pct:6.2f}%"
+
+
+def _make_training_progress_callback(
+    training_display: str,
+    external_callback: callable | None = None,
+):
+    if training_display != "progress":
+        return None
+
+    def _callback(percent: float, info: dict[str, Any] | None = None):
+        payload = info or {}
+        if external_callback is not None:
+            try:
+                external_callback(percent, payload)
+            except Exception:
+                pass
+            return
+
+        stage = payload.get("stage", "training")
+        message = payload.get("message", stage)
+        line = f"  [TRAIN] {_format_progress_bar(percent)} {message}"
+        end = "\n" if float(percent) >= 100.0 else "\r"
+        print(line, end=end, flush=True)
+
+    return _callback
 
 
 class _TeeStream:
@@ -529,9 +590,40 @@ def _run_source_comparison(args) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main(
+    *,
+    training_display: str | None = None,
+    training_progress_callback: callable | None = None,
+) -> None:
     args = parse_args()
     _configure_warning_filters(args.ignore_known_warnings)
+
+    selected_training_display = training_display or args.training_display
+
+    # Parse per-step display overrides (format: "5:progress,6:verbose")
+    step_display_overrides: dict[int, str] = {}
+    if args.step_display:
+        try:
+            for part in str(args.step_display).split(","):
+                if not part.strip():
+                    continue
+                k, v = part.split(":")
+                step_display_overrides[int(k.strip())] = v.strip()
+        except Exception:
+            print("[WARN] Could not parse --step-display, ignoring overrides.")
+
+    # Create per-step progress callbacks so ML and DL can use different displays
+    ml_display = step_display_overrides.get(5, selected_training_display)
+    dl_display = step_display_overrides.get(6, selected_training_display)
+
+    progress_callback_ml = _make_training_progress_callback(
+        ml_display,
+        external_callback=training_progress_callback,
+    )
+    progress_callback_dl = _make_training_progress_callback(
+        dl_display,
+        external_callback=training_progress_callback,
+    )
 
     runner_name = args.runner_name.strip() or getpass.getuser()
     runner_slug = _safe_slug(runner_name, fallback="runner")
@@ -602,12 +694,23 @@ def main() -> None:
         print("="*60)
     
         data_gen = SampleDataGenerator()
-        data_mode = data_gen.ask_data_mode()
 
-        source_selector = DataSourceSelector()
-        source_selector.print_welcome()
-        selected_sources = source_selector.ask_source_selection()
-        print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
+        # Allow non-interactive mode via CLI args (used by GUI)
+        if args.data_mode:
+            data_mode = args.data_mode
+            print(f"[AUTO] Using data mode from CLI: {data_mode}")
+        else:
+            data_mode = data_gen.ask_data_mode()
+
+        if args.selected_sources:
+            # Parse provided comma-separated list
+            selected_sources = [s.strip().upper() for s in str(args.selected_sources).split(",") if s.strip()]
+            print(f"[AUTO] Using selected sources from CLI: {', '.join(selected_sources)}")
+        else:
+            source_selector = DataSourceSelector()
+            source_selector.print_welcome()
+            selected_sources = source_selector.ask_source_selection()
+            print(f"\n[OK] Selected sources: {', '.join(selected_sources)}")
 
         combo_slug = _safe_slug("_".join(sorted(s.upper() for s in selected_sources)), fallback="UNSPECIFIED")
         combo_graph_dir = run_root / "graphs" / f"combo_{combo_slug}"
@@ -628,9 +731,13 @@ def main() -> None:
     # ------------------------------------------------------------------
     biodata_collector = None
     biodata = None
-    add_biodata = input("\n" + "="*60 + 
-                       "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
-    
+    # Biodata collection: can be invoked non-interactively via --add-biodata
+    if args.add_biodata:
+        add_biodata = "y"
+    else:
+        add_biodata = input("\n" + "="*60 + 
+                           "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
+
     if add_biodata in ["y", "yes"]:
         print("\n" + "="*60)
         print("  Step 0.5 – Biodata & Growth Conditions Collection")
@@ -1021,6 +1128,8 @@ def main() -> None:
         n_estimators_clf=selected_n_estimators_clf,
         n_estimators_reg=selected_n_estimators_reg,
         random_state=42,
+        progress_callback=progress_callback_ml,
+        verbose=(ml_display != "progress"),
     )
     ml_results = evaluate_ml(ml_model, test_ds)
     print_results(ml_results, model_name=f"ML Baseline ({selected_ml_clf} + {selected_ml_reg})")
@@ -1048,6 +1157,8 @@ def main() -> None:
             lr         = selected_dl_params["lr"],
             dropout    = selected_dl_params["dropout"],
             patience   = selected_dl_params["patience"],
+            progress_callback=progress_callback_dl,
+            verbose=(dl_display != "progress"),
         )
         dl_results = evaluate_dl(dl_model, test_ds)
         print_results(dl_results, model_name=f"DL Multi-Task Model (PyTorch {args.dl_model.upper()})")
