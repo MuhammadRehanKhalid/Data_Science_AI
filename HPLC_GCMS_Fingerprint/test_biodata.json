@@ -1,0 +1,4 @@
+[
+  {"sample_id": "S1", "species": "Chlorella vulgaris", "growth_temp": 25},
+  {"sample_id": "S2", "species": "Nannochloropsis oculata", "growth_temp": 20}
+]

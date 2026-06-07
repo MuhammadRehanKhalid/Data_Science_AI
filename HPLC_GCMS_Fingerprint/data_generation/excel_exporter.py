@@ -151,6 +151,6 @@ def export_to_excel(
 
     print(
         f"[ExcelExporter] Wrote {len(hplc_df)} HPLC rows and {len(gcms_df)} GC-MS rows "
-        f"→ {output_path}"
+        f"-> {output_path}"
     )
     return output_path

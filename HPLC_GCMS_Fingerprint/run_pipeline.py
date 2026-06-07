@@ -143,8 +143,12 @@ def parse_args() -> argparse.Namespace:
         help="Replicates per species (default: 15 -> 90 total samples)",
     )
     p.add_argument(
-        "--output", type=str, default="HPLC_GCMS_Fingerprint/data/fingerprint_data.xlsx",
+        "--output", type=str, default=None,
         help="Path for the generated Excel workbook.",
+    )
+    p.add_argument(
+        "--safe-write", action="store_true", default=True,
+        help="When set (default) back up existing output files instead of overwriting them.",
     )
     p.add_argument(
         "--representation", type=str, default="combined",
@@ -186,6 +190,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--add-biodata", action="store_true",
         help="When set, collect biodata non-interactively where possible (skips prompts).",
+    )
+    p.add_argument(
+        "--biodata-file", type=str, default=None,
+        help="Path to a biodata JSON or CSV file to load non-interactively (skips prompts).",
+    )
+    p.add_argument(
+        "--real-data-dir", type=str, default=None,
+        help="Path to the directory containing real source files. If omitted, the pipeline prompts interactively.",
+    )
+    p.add_argument(
+        "--align-samples", action="store_true",
+        help="When loading real data, align samples across sources without prompting.",
+    )
+    p.add_argument(
+        "--non-interactive", action="store_true",
+        help="Skip any remaining interactive prompts (useful for GUI launches).",
     )
     p.add_argument(
         "--skip-dl", action="store_true",
@@ -648,7 +668,31 @@ def main(
         print(f"  Output log   : {log_file_path}")
         print("=" * 80 + "\n")
 
-        output_path = Path(args.output)
+        # Decide output workbook path: prefer CLI arg, otherwise write into per-run artifacts
+        if args.output:
+            output_path = Path(args.output)
+        else:
+            output_path = run_root / "data" / "fingerprint_data.xlsx"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _backup_if_exists(path: Path):
+            if not path.exists():
+                return
+            if not args.safe_write:
+                return
+            # Create backups folder under run_root
+            backups = run_root / "backups"
+            backups.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = backups / f"{path.name}.{ts}.bak"
+            try:
+                path.rename(dest)
+                print(f"[SAFE-WRITE] Existing file moved to backup: {dest}")
+            except Exception as e:
+                print(f"[WARN] Could not backup {path} before overwrite: {e}")
+
+        # Back up any existing workbook to avoid accidental deletion/overwrite
+        _backup_if_exists(output_path)
         figures_dir = run_root / "graphs"
         # Handle comparison mode
         if args.compare_sources:
@@ -731,14 +775,37 @@ def main(
     # ------------------------------------------------------------------
     biodata_collector = None
     biodata = None
-    # Biodata collection: can be invoked non-interactively via --add-biodata
-    if args.add_biodata:
-        add_biodata = "y"
-    else:
-        add_biodata = input("\n" + "="*60 + 
-                           "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
+    # Biodata collection: allow loading from file non-interactively
+    if args.biodata_file:
+        bf = Path(args.biodata_file)
+        if bf.exists():
+            try:
+                if bf.suffix.lower() in {".json", ".jsonl"}:
+                    biodata = json.loads(bf.read_text(encoding="utf-8"))
+                elif bf.suffix.lower() in {".csv", ".tsv"}:
+                    biodata = pd.read_csv(bf).to_dict(orient="records")
+                else:
+                    # try JSON fallback
+                    biodata = json.loads(bf.read_text(encoding="utf-8"))
+                print(f"[AUTO] Loaded biodata from: {bf}")
+            except Exception as e:
+                print(f"[WARN] Could not load biodata file {bf}: {e}")
+                biodata = None
+        else:
+            print(f"[WARN] Biodata file not found: {bf}")
 
-    if add_biodata in ["y", "yes"]:
+    # Biodata collection: can be invoked non-interactively via --add-biodata
+    if biodata is None:
+        if args.add_biodata:
+            add_biodata = "y"
+        elif args.non_interactive or args.data_mode == "dummy":
+            add_biodata = "n"
+            print("[AUTO] Skipping biodata collection in non-interactive/dummy mode")
+        else:
+            add_biodata = input("\n" + "="*60 + 
+                               "\nWould you like to add sample metadata and growth conditions? (y/n): ").strip().lower()
+
+    if biodata is None and add_biodata in ["y", "yes"]:
         print("\n" + "="*60)
         print("  Step 0.5 – Biodata & Growth Conditions Collection")
         print("="*60)
@@ -849,11 +916,26 @@ def main(
         print(f"\n[Real Data Mode] Loading data for: {', '.join(selected_sources)}")
         
         # Use the real data loader to load from files
-        real_data = prompt_for_real_data(selected_sources)
+        real_data = prompt_for_real_data(
+            selected_sources,
+            default_data_dir=args.real_data_dir,
+        )
         
         hplc_df = real_data.get("HPLC")
         gcms_df = real_data.get("GCMS")
         ftir_df = real_data.get("FTIR")
+
+        if args.align_samples and sum(1 for v in [hplc_df, gcms_df, ftir_df] if v is not None) > 1:
+            try:
+                loader = RealDataLoader(selected_sources)
+                loader.data = {k: v for k, v in real_data.items() if v is not None}
+                aligned = loader.align_samples()
+                hplc_df = aligned.get("HPLC")
+                gcms_df = aligned.get("GCMS")
+                ftir_df = aligned.get("FTIR")
+                print("[AUTO] Aligned real data samples across selected sources")
+            except Exception as exc:
+                print(f"[WARN] Could not auto-align real data samples: {exc}")
         
         # Validate that at least one source was loaded
         loaded_count = sum(1 for v in real_data.values() if v is not None)
