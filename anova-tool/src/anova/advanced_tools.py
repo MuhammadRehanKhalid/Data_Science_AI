@@ -1,11 +1,22 @@
 from pathlib import Path
+from itertools import combinations
 import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.stats import levene, probplot, shapiro, t
+from scipy.stats import f, levene, probplot, shapiro, t, ttest_ind
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from statsmodels.stats.multitest import multipletests
+
+try:
+    from statsmodels.stats.libqsturng import psturng, qsturng
+except Exception:  # pragma: no cover - fallback if statsmodels internals move
+    psturng = None
+    qsturng = None
+
+
+POSTHOC_METHOD = "Recommended"
 
 
 def significance_stars(p_value):
@@ -264,3 +275,371 @@ def build_response_summary(df_sub, response, group_col, model, anova_table, lsd,
     })
 
     return summary, means
+
+
+def set_posthoc_method(method):
+    global POSTHOC_METHOD
+    POSTHOC_METHOD = normalize_posthoc_method(method)
+
+
+def normalize_posthoc_method(method):
+    if method is None:
+        return "Recommended"
+
+    normalized = str(method).strip().lower()
+    mapping = {
+        "recommended": "Recommended",
+        "auto": "Recommended",
+        "tukey": "Tukey HSD",
+        "tukey hsd": "Tukey HSD",
+        "tukey-kramer": "Tukey-Kramer",
+        "tukey kramer": "Tukey-Kramer",
+        "tukeykramer": "Tukey-Kramer",
+        "bonferroni": "Bonferroni",
+        "holm": "Holm",
+        "sidak": "Sidak",
+        "lsd": "LSD",
+        "games-howell": "Games-Howell",
+        "games howell": "Games-Howell",
+        "gameshowell": "Games-Howell",
+        "scheffe": "Scheffe",
+        "scheffé": "Scheffe",
+        "duncan": "Duncan",
+        "student-newman-keuls": "Student-Newman-Keuls",
+        "student newman keuls": "Student-Newman-Keuls",
+        "snk": "Student-Newman-Keuls",
+    }
+    return mapping.get(normalized, method)
+
+
+def suggest_posthoc_test(df_sub, group_col, response):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    group_sizes = cleaned.groupby(group_col).size()
+    n_groups = int(group_sizes.shape[0])
+    balanced = group_sizes.nunique() == 1 if n_groups else False
+
+    grouped_values = [values[response].dropna().values for _, values in cleaned.groupby(group_col)]
+    grouped_values = [values for values in grouped_values if len(values) >= 2]
+
+    if len(grouped_values) >= 2:
+        levene_stat, levene_p = levene(*grouped_values, center="median")
+    else:
+        levene_p = np.nan
+
+    if n_groups <= 2:
+        method = "LSD"
+        reason = "Only two groups are present, so a simple pairwise comparison is sufficient."
+    elif pd.notna(levene_p) and levene_p >= 0.05 and balanced:
+        method = "Tukey HSD"
+        reason = "Group sizes are balanced and variances look similar, so Tukey HSD is a strong all-pairs choice."
+    elif pd.notna(levene_p) and levene_p < 0.05:
+        method = "Games-Howell"
+        reason = "Variances look unequal, so Games-Howell is more appropriate because it does not assume equal variances."
+    elif not balanced:
+        method = "Tukey-Kramer"
+        reason = "Group sizes are unbalanced but variances appear similar, so Tukey-Kramer is a better default than plain Tukey HSD."
+    else:
+        method = "Bonferroni"
+        reason = "The design is fairly simple, but Bonferroni is a conservative fallback when a stricter adjustment is preferred."
+
+    return {
+        "method": method,
+        "reason": reason,
+        "balanced": balanced,
+        "levene_pvalue": levene_p,
+        "groups": n_groups,
+    }
+
+
+def _pairwise_ttest_table(df_sub, response, group_col, correction_method, equal_var):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    groups = list(cleaned[group_col].astype(str).unique())
+    rows = []
+
+    for group_a, group_b in combinations(groups, 2):
+        values_a = cleaned.loc[cleaned[group_col].astype(str) == group_a, response].dropna().values
+        values_b = cleaned.loc[cleaned[group_col].astype(str) == group_b, response].dropna().values
+        stat, p_value = ttest_ind(values_a, values_b, equal_var=equal_var, nan_policy="omit")
+        rows.append({
+            "Group1": group_a,
+            "Group2": group_b,
+            "Statistic": stat,
+            "P-raw": p_value,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    table = pd.DataFrame(rows)
+    if correction_method == "none":
+        table["P-adj"] = table["P-raw"]
+        table["Reject"] = table["P-raw"] < 0.05
+    else:
+        reject, p_adj, _, _ = multipletests(table["P-raw"].values, alpha=0.05, method=correction_method)
+        table["P-adj"] = p_adj
+        table["Reject"] = reject
+
+    return table
+
+
+def _pairwise_range_table(df_sub, response, group_col, range_correction, alpha=0.05):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    group_stats = cleaned.groupby(group_col)[response].agg(["mean", "var", "count"]).reset_index()
+    if len(group_stats) < 2 or qsturng is None or psturng is None:
+        return pd.DataFrame()
+
+    group_stats = group_stats.sort_values("mean", ascending=False).reset_index(drop=True)
+    total_groups = len(group_stats)
+    rows = []
+
+    for left_index, left in group_stats.iterrows():
+        for right_index in range(left_index + 1, total_groups):
+            right = group_stats.iloc[right_index]
+            range_size = right_index - left_index + 1
+            left_term = left["var"] / left["count"] if left["count"] > 0 else np.nan
+            right_term = right["var"] / right["count"] if right["count"] > 0 else np.nan
+            se = np.sqrt(0.5 * (left_term + right_term))
+            if not np.isfinite(se) or se == 0:
+                continue
+
+            q_stat = abs(left["mean"] - right["mean"]) / se
+            if range_correction == "snk":
+                critical_alpha = alpha
+            elif range_correction == "duncan":
+                critical_alpha = 1 - (1 - alpha) ** max(1, range_size - 1)
+            else:
+                critical_alpha = alpha
+
+            q_crit = qsturng(1 - critical_alpha, range_size, max(1, len(cleaned) - total_groups))
+            p_value = 1 - psturng(q_stat, range_size, max(1, len(cleaned) - total_groups))
+            rows.append({
+                "Group1": str(left[group_col]),
+                "Group2": str(right[group_col]),
+                "Statistic": q_stat,
+                "Range": range_size,
+                "Critical": q_crit,
+                "P-raw": p_value,
+                "P-adj": p_value,
+                "Reject": bool(q_stat > q_crit),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def _pairwise_tukey_kramer_table(df_sub, response, group_col):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    group_stats = cleaned.groupby(group_col)[response].agg(["mean", "var", "count"]).reset_index()
+    if len(group_stats) < 2 or qsturng is None or psturng is None:
+        return pd.DataFrame()
+
+    df_error = len(cleaned) - len(group_stats)
+    if df_error <= 0:
+        return pd.DataFrame()
+
+    rows = []
+    for _, left in group_stats.iterrows():
+        for _, right in group_stats.iterrows():
+            if str(left[group_col]) >= str(right[group_col]):
+                continue
+            mean_diff = abs(left[response] - right[response])
+            left_term = left["var"] / left["count"] if left["count"] > 0 else np.nan
+            right_term = right["var"] / right["count"] if right["count"] > 0 else np.nan
+            se = np.sqrt(0.5 * (left_term + right_term))
+            if not np.isfinite(se) or se == 0:
+                continue
+
+            q_stat = mean_diff / se
+            q_crit = qsturng(0.95, len(group_stats), df_error)
+            p_value = 1 - psturng(q_stat, len(group_stats), df_error)
+            rows.append({
+                "Group1": str(left[group_col]),
+                "Group2": str(right[group_col]),
+                "Statistic": q_stat,
+                "df": df_error,
+                "Critical": q_crit,
+                "P-raw": p_value,
+                "P-adj": p_value,
+                "Reject": bool(q_stat > q_crit),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def _pairwise_games_howell_table(df_sub, response, group_col):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    group_stats = cleaned.groupby(group_col)[response].agg(["mean", "var", "count"]).reset_index()
+    if len(group_stats) < 2 or qsturng is None or psturng is None:
+        return pd.DataFrame()
+
+    rows = []
+    group_names = group_stats[group_col].astype(str).tolist()
+    total_groups = len(group_names)
+
+    for _, left in group_stats.iterrows():
+        for _, right in group_stats.iterrows():
+            if str(left[group_col]) >= str(right[group_col]):
+                continue
+            mean_diff = abs(left[response] - right[response])
+            left_term = left["var"] / left["count"] if left["count"] > 0 else np.nan
+            right_term = right["var"] / right["count"] if right["count"] > 0 else np.nan
+            se = np.sqrt((left_term + right_term) / 2)
+            if not np.isfinite(se) or se == 0:
+                continue
+
+            q_stat = mean_diff / se
+            denominator = 0.0
+            if left["count"] > 1:
+                denominator += (left_term ** 2) / (left["count"] - 1)
+            if right["count"] > 1:
+                denominator += (right_term ** 2) / (right["count"] - 1)
+            if denominator <= 0:
+                continue
+
+            df_welch = ((left_term + right_term) ** 2) / denominator
+            q_crit = qsturng(0.95, total_groups, df_welch)
+            p_value = 1 - psturng(q_stat, total_groups, df_welch)
+            rows.append({
+                "Group1": str(left[group_col]),
+                "Group2": str(right[group_col]),
+                "Statistic": q_stat,
+                "df": df_welch,
+                "P-raw": p_value,
+                "P-adj": p_value,
+                "Reject": bool(q_stat > q_crit),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def _pairwise_scheffe_table(df_sub, response, group_col):
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    group_stats = cleaned.groupby(group_col)[response].agg(["mean", "var", "count"]).reset_index()
+    if len(group_stats) < 2:
+        return pd.DataFrame()
+
+    total_groups = len(group_stats)
+    result_rows = []
+    pooled_mse = cleaned.groupby(group_col)[response].var().mean()
+    if not np.isfinite(pooled_mse) or pooled_mse <= 0:
+        pooled_mse = cleaned[response].var(ddof=1)
+
+    df_error = len(cleaned) - total_groups
+    if df_error <= 0 or not np.isfinite(pooled_mse) or pooled_mse <= 0:
+        return pd.DataFrame()
+
+    f_crit = f.ppf(0.95, total_groups - 1, df_error)
+    for _, left in group_stats.iterrows():
+        for _, right in group_stats.iterrows():
+            if str(left[group_col]) >= str(right[group_col]):
+                continue
+            mean_diff = abs(left[response] - right[response])
+            se_term = pooled_mse * (1 / left["count"] + 1 / right["count"])
+            if se_term <= 0:
+                continue
+            f_stat = (mean_diff ** 2) / (se_term * max(1, total_groups - 1))
+            p_value = 1 - f.cdf(f_stat, total_groups - 1, df_error)
+            result_rows.append({
+                "Group1": str(left[group_col]),
+                "Group2": str(right[group_col]),
+                "Statistic": f_stat,
+                "df": df_error,
+                "P-raw": p_value,
+                "P-adj": p_value,
+                "Reject": bool(f_stat > f_crit),
+            })
+
+    return pd.DataFrame(result_rows)
+
+
+def add_posthoc_hypotheses(table):
+    if table.empty:
+        return table
+
+    table = table.copy()
+    table["H0"] = "H0: mean(Group1) = mean(Group2)"
+    table["H1"] = "H1: mean(Group1) != mean(Group2)"
+    if "Reject" in table.columns:
+        table["Decision"] = np.where(table["Reject"], "Reject H0", "Fail to reject H0")
+    elif "reject" in table.columns:
+        table["Decision"] = np.where(table["reject"], "Reject H0", "Fail to reject H0")
+    else:
+        table["Decision"] = np.where(table.get("P-adj", table.get("P-raw", 1.0)) < 0.05, "Reject H0", "Fail to reject H0")
+    return table
+
+
+def build_posthoc_guide_table(table):
+    if table is None or table.empty:
+        return pd.DataFrame()
+
+    method = str(table["Method"].iloc[0]) if "Method" in table.columns else "Unknown"
+    reason = str(table["Reason"].iloc[0]) if "Reason" in table.columns else "No reason recorded"
+
+    guide_rows = [
+        {"Item": "Selected Method", "Value": method},
+        {"Item": "Why this method", "Value": reason},
+    ]
+
+    if "H0" in table.columns:
+        guide_rows.append({"Item": "Null Hypothesis", "Value": str(table["H0"].iloc[0])})
+    if "H1" in table.columns:
+        guide_rows.append({"Item": "Alternative Hypothesis", "Value": str(table["H1"].iloc[0])})
+
+    guide_rows.append({"Item": "Interpretation Tip", "Value": "Use the decision column to see whether the pairwise null hypothesis was rejected."})
+    return pd.DataFrame(guide_rows)
+
+
+def run_posthoc_test(df_sub, response, group_col, method=None):
+    chosen_method = normalize_posthoc_method(method or POSTHOC_METHOD)
+    recommendation = suggest_posthoc_test(df_sub, group_col, response)
+
+    if chosen_method == "Recommended":
+        chosen_method = recommendation["method"]
+
+    cleaned = df_sub[[group_col, response]].dropna().copy()
+    if cleaned[group_col].nunique() < 2:
+        return pd.DataFrame()
+
+    if chosen_method == "Tukey HSD":
+        tukey = pairwise_tukeyhsd(endog=cleaned[response], groups=cleaned[group_col].astype(str), alpha=0.05)
+        tukey_table = pd.DataFrame(tukey.summary().data[1:], columns=tukey.summary().data[0])
+        tukey_table.insert(0, "Method", chosen_method)
+        tukey_table.insert(1, "Reason", recommendation["reason"])
+        tukey_table["H0"] = "H0: mean(Group1) = mean(Group2)"
+        tukey_table["H1"] = "H1: mean(Group1) != mean(Group2)"
+        tukey_table["Decision"] = np.where(tukey_table["reject"].astype(str).str.lower().isin(["true", "1"]), "Reject H0", "Fail to reject H0")
+        return tukey_table
+
+    if chosen_method == "Tukey-Kramer":
+        table = _pairwise_tukey_kramer_table(df_sub, response, group_col)
+    elif chosen_method == "Duncan":
+        table = _pairwise_range_table(df_sub, response, group_col, range_correction="duncan")
+    elif chosen_method == "Student-Newman-Keuls":
+        table = _pairwise_range_table(df_sub, response, group_col, range_correction="snk")
+
+    if chosen_method == "Bonferroni":
+        table = _pairwise_ttest_table(df_sub, response, group_col, "bonferroni", equal_var=False)
+    elif chosen_method == "Holm":
+        table = _pairwise_ttest_table(df_sub, response, group_col, "holm", equal_var=False)
+    elif chosen_method == "Sidak":
+        table = _pairwise_ttest_table(df_sub, response, group_col, "sidak", equal_var=False)
+    elif chosen_method == "LSD":
+        table = _pairwise_ttest_table(df_sub, response, group_col, "none", equal_var=False)
+    elif chosen_method == "Games-Howell":
+        table = _pairwise_games_howell_table(df_sub, response, group_col)
+    elif chosen_method == "Scheffe":
+        table = _pairwise_scheffe_table(df_sub, response, group_col)
+    else:
+        table = _pairwise_ttest_table(df_sub, response, group_col, "holm", equal_var=False)
+        chosen_method = "Holm"
+
+    if table.empty:
+        return table
+
+    table.insert(0, "Method", chosen_method)
+    table.insert(1, "Reason", recommendation["reason"])
+    table = add_posthoc_hypotheses(table)
+    return table
+
+
+def run_tukey_posthoc(df_sub, response, group_col):
+    return run_posthoc_test(df_sub, response, group_col, method=POSTHOC_METHOD)

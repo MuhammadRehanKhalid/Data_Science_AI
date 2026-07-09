@@ -1,0 +1,132 @@
+ANOVA Tool Booklet
+
+1. One-way ANOVA
+What it is:
+A test that compares the mean of one numeric response across one categorical factor.
+
+When to use it:
+Use it when you have one factor and one or more response variables.
+
+How to use it:
+Put the factor column first, then the response columns.
+
+What to look for:
+A p-value below 0.05 means at least one group mean is different.
+
+2. Two-way ANOVA
+What it is:
+A test for two factors and their interaction.
+
+When to use it:
+Use it when you want to know whether factor A, factor B, or both affect the response.
+
+How to use it:
+Put the two factor columns first, then the response columns.
+
+What to look for:
+A significant interaction means the effect of one factor depends on the other.
+
+3. Three-way and Four-way ANOVA
+What it is:
+Factorial ANOVA with three or four factors.
+
+When to use it:
+Use it only when the experiment really has multiple interacting factors.
+
+How to use it:
+Put the factor columns first, then the response columns.
+
+What to look for:
+Check the interaction terms before interpreting main effects.
+
+4. CRD
+What it is:
+Completely Randomized Design.
+
+When to use it:
+Use it when there is no blocking structure.
+
+How to use it:
+Put treatment first, then the response columns.
+
+5. RCBD
+What it is:
+Randomized Complete Block Design.
+
+When to use it:
+Use it when you have blocks that explain nuisance variation.
+
+How to use it:
+Put treatment first, block second, then response columns.
+
+6. Split-plot, split-split plot, strip-split, and split-plot Latin Square
+What it is:
+Designs with hard-to-change factors and multiple error terms.
+
+When to use it:
+Use it when one factor is applied at a larger experimental unit than another.
+
+How to use it:
+Put the layout columns first in the exact order expected by the design.
+
+What to look for:
+Main-plot effects often have different precision than subplot effects.
+
+7. Latin Square
+What it is:
+A design that controls row and column variation while comparing treatments.
+
+When to use it:
+Use it when row and column both create nuisance variation.
+
+How to use it:
+Put row, column, treatment, then response columns.
+
+8. Post hoc tests
+What they are:
+Pairwise tests used after ANOVA to find which groups differ.
+
+Common choices:
+Tukey HSD for balanced all-pairs comparisons.
+Tukey-Kramer for unbalanced group sizes with similar variances.
+Games-Howell for unequal variances or unbalanced sample sizes.
+Duncan for exploratory range testing when you want to detect more differences.
+Student-Newman-Keuls for stepwise range comparisons.
+Holm for unbalanced or unequal-variance data when you want family-wise control.
+Bonferroni for strict error control.
+Sidak for a slightly less conservative correction.
+LSD for exploratory work only.
+Scheffe for very conservative control, especially when you want a safe general contrast test.
+
+How to choose:
+Balanced and similar variance usually points to Tukey HSD.
+Unbalanced but still fairly regular data usually points to Tukey-Kramer.
+Unequal variances usually points to Games-Howell.
+Unbalanced or more conservative workflows usually point to Holm, Bonferroni, or Scheffe.
+Duncan and LSD are more liberal and are better for exploratory work than final confirmation.
+
+9. Diagnostics
+Shapiro-Wilk:
+Checks whether residuals look normal.
+
+Levene:
+Checks whether group variances are similar.
+
+Residual histogram and Q-Q plot:
+Show whether residuals behave like a normal distribution.
+
+10. Dummy data generator
+What it does:
+Creates sample datasets that match the column structure expected by each design.
+
+When to use it:
+Use it to learn how to format your real data before analysis.
+
+How to use it:
+Choose a design, pick rows per cell, and save the generated file.
+
+11. Output files
+The tool saves the Excel report, plot index, run summary, post hoc results, and figure files.
+
+12. Practical workflow
+Generate dummy data first, inspect the structure, then run the real analysis, check assumptions, and review post hoc comparisons.

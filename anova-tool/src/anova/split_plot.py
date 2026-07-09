@@ -8,6 +8,7 @@ from statsmodels.formula.api import ols
 
 from .advanced_tools import (
     build_output_assets_dir,
+    build_posthoc_guide_table,
     create_correlation_heatmap,
     create_group_boxplot,
     create_interaction_plot,
@@ -121,6 +122,7 @@ def split_plot_anova(df, mainplot, subplot, output_path):
 
             if not posthoc.empty:
                 posthoc.to_excel(writer, sheet_name=f"{safe_name}_Posthoc", index=False)
+                build_posthoc_guide_table(posthoc).to_excel(writer, sheet_name=f"{safe_name}_Posthoc_Guide", index=False)
 
             response_slug = safe_filename(response)
             group_boxplot_path = assets_dir / f"{response_slug}_boxplot.png"
