@@ -1,0 +1,18 @@
+species_input,scientific_name,tax_id,rank,kingdom,phylum,class,order,family,genus,status,origin,species_label
+Alaria esculenta,Alaria esculenta,2889,species,,,Phaeophyceae,Laminariales,Alariaceae,Alaria,SUCCESS,Phaeophyceae,Alaria esculenta
+Asparagopsis taxiformis,Asparagopsis taxiformis,260499,species,,Rhodophyta,Florideophyceae,Bonnemaisoniales,Bonnemaisoniaceae,Asparagopsis,SUCCESS,Rhodophyta,Asparagopsis taxiformis
+Chlorella vulgaris,Chlorella vulgaris,3077,species,Viridiplantae,Chlorophyta,Trebouxiophyceae,Chlorellales,Chlorellaceae,Chlorella,SUCCESS,Chlorophyta,Chlorella vulgaris
+Chromochloris zofingiensis,Chromochloris zofingiensis,31302,species,Viridiplantae,Chlorophyta,Chlorophyceae,Sphaeropleales,Chromochloridaceae,Chromochloris,SUCCESS,Chlorophyta,Chromochloris zofingiensis
+Dunaliella tertiolecta,Dunaliella tertiolecta,3047,species,Viridiplantae,Chlorophyta,Chlorophyceae,Chlamydomonadales,Dunaliellaceae,Dunaliella,SUCCESS,Chlorophyta,Dunaliella tertiolecta
+Nannochloropsis gaditana,Nannochloropsis gaditana,72520,species,,,Eustigmatophyceae,Eustigmatales,Monodopsidaceae,Nannochloropsis,SUCCESS,,Nannochloropsis gaditana
+Palmaria palmata,Palmaria palmata,2822,species,,Rhodophyta,Florideophyceae,Palmariales,Palmariaceae,Palmaria,SUCCESS,Rhodophyta,Palmaria palmata
+Phaeodactylum tricornutum,Phaeodactylum tricornutum,2850,species,,Bacillariophyta,Bacillariophyceae,Surirellales,Neidiaceae,Phaeodactylum,SUCCESS,Bacillariophyta,Phaeodactylum tricornutum
+Porphyridium purpureum,Porphyridium purpureum,35688,species,,Rhodophyta,Bangiophyceae,Porphyridiales,Porphyridiaceae,Porphyridium,SUCCESS,Rhodophyta,Porphyridium purpureum
+Prorocentrum lima,Prorocentrum lima,39448,species,,,Dinophyceae,Prorocentrales,Prorocentraceae,Prorocentrum,SUCCESS,Dinoflagellata,Prorocentrum lima
+Saccharina latissima,Saccharina latissima,309358,species,,,Phaeophyceae,Laminariales,Laminariaceae,Saccharina,SUCCESS,Phaeophyceae,Saccharina latissima
+Sacchorhiza polyschides,Polyschides,203169,genus,Metazoa,Mollusca,Scaphopoda,Gadilida,Siphonodentaliidae,,SUCCESS,Phaeophyceae,Sacchorhiza polyschides
+Scenedesmus obliquus,Tetradesmus obliquus,3088,species,Viridiplantae,Chlorophyta,Chlorophyceae,Sphaeropleales,Scenedesmaceae,Tetradesmus,SUCCESS,Chlorophyta,Scenedesmus obliquus
+Spirulina major,Spirulina major,270636,species,Bacillati,Cyanobacteriota,Cyanophyceae,Spirulinales,Spirulinaceae,Spirulina,SUCCESS,Cyanobacteria,Spirulina major
+Spirulina platensis,Limnospira platensis,118562,species,Bacillati,Cyanobacteriota,Cyanophyceae,Oscillatoriales,Sirenicapillariaceae,Limnospira,SUCCESS,Cyanobacteriota,Spirulina platensis
+Tetraselmis subcordiformis,Tetraselmis subcordiformis,3161,species,Viridiplantae,Chlorophyta,Chlorodendrophyceae,Chlorodendrales,Chlorodendraceae,Tetraselmis,SUCCESS,Chlorophyta,Tetraselmis subcordiformis
+Ulva intestinalis,Ulva intestinalis,3116,species,Viridiplantae,Chlorophyta,Ulvophyceae,Ulvales,Ulvaceae,Ulva,SUCCESS,Chlorophyta,Ulva intestinalis
